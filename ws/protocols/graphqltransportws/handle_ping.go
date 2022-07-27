@@ -2,15 +2,16 @@ package graphqltransportws
 
 // handlePing handles a ping message
 func (c *wsConnection) handlePing(msg *RawMessage) {
-	payload := msg.Payload()
+	var payload map[string]interface{}
+
+	if msg.HasPayload() {
+		payload, _ = msg.RecordPayload()
+	}
 
 	if c.config.OnPing != nil {
 		c.config.OnPing(c, payload)
 		return
 	}
 
-	c.outgoing <- OperationMessage{
-		Type:    MsgPong,
-		Payload: payload,
-	}
+	c.Send(NewPingMessage(payload))
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/ws/connection"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
@@ -21,10 +22,6 @@ const (
 	ContentTypeFormURLEncoded = "application/x-www-form-urlencoded"
 )
 
-var (
-	ConnKey interface{} = "conn"
-)
-
 type Options struct {
 	Pretty             bool
 	RootValueFunc      RootValueFunc
@@ -34,8 +31,8 @@ type Options struct {
 	ResultCallbackFunc ResultCallbackFunc
 	Logger             logger.Logger
 	WS                 *WSOptions
-	Playground         *PlaygroundOptions
-	GraphiQL           *GraphiQLOptions
+	Playground         *ide.PlaygroundOptions
+	GraphiQL           *ide.GraphiQLOptions
 }
 
 type WSOptions struct {

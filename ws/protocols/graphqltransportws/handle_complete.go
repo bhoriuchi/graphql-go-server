@@ -3,8 +3,8 @@ package graphqltransportws
 func (c *wsConnection) handleComplete(msg *RawMessage) {
 	id, err := msg.ID()
 	if err != nil {
-		c.logger.Errorf(err.Error())
-		c.Close(BadRequest, err.Error())
+		c.log.Errorf("%d: %s", BadRequest, err)
+		c.setClose(BadRequest, err.Error())
 		return
 	}
 

@@ -9,8 +9,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
+	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 )
@@ -198,14 +200,14 @@ func (s *Server) ContextHandler(ctx context.Context, w http.ResponseWriter, r *h
 		acceptHeader := r.Header.Get("Accept")
 		_, raw := r.URL.Query()["raw"]
 		if !raw && !strings.Contains(acceptHeader, "application/json") && strings.Contains(acceptHeader, "text/html") {
-			renderGraphiQL(s.options.GraphiQL, w, r, params)
+			ide.RenderGraphiQL(s.options.GraphiQL, w, r, params)
 			return
 		}
 	} else if s.options.Playground != nil {
 		acceptHeader := r.Header.Get("Accept")
 		_, raw := r.URL.Query()["raw"]
 		if !raw && !strings.Contains(acceptHeader, "application/json") && strings.Contains(acceptHeader, "text/html") {
-			renderPlayground(s.options.Playground, w, r)
+			ide.RenderPlayground(s.options.Playground, w, r)
 			return
 		}
 	}
@@ -231,6 +233,7 @@ func (s *Server) ContextHandler(ctx context.Context, w http.ResponseWriter, r *h
 	}
 }
 
+// WSHandler handles websocket connection upgrade
 func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	// Establish a WebSocket connection
 	var ws, err = s.upgrader.Upgrade(w, r, nil)
@@ -246,13 +249,19 @@ func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.R
 	// graphql-ws protocol
 	case graphqlws.Subprotocol:
 		s.newGraphQLWSConnection(ctx, r, ws)
-		return
 
 	// graphql-transport-ws protocol
 	case graphqltransportws.Subprotocol:
-	}
+		graphqltransportws.NewConnection(ctx, graphqltransportws.Config{
+			WS:            ws,
+			Schema:        &s.schema,
+			Logger:        s.log,
+			RootValueFunc: s.options.RootValueFunc,
+		})
 
-	// TODO: support other popular protocols
-	s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %s", ws.Subprotocol())
-	ws.Close()
+	default:
+		s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %s", ws.Subprotocol())
+		ws.WriteMessage(websocket.CloseProtocolError, []byte("Connection does not implement a supported GraphQL subprotocol"))
+		ws.Close()
+	}
 }

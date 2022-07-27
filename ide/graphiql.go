@@ -1,4 +1,4 @@
-package server
+package ide
 
 import (
 	"encoding/json"
@@ -44,7 +44,7 @@ type graphiqlData struct {
 }
 
 // renderGraphiQL renders the GraphiQL GUI
-func renderGraphiQL(config *GraphiQLOptions, w http.ResponseWriter, r *http.Request, params graphql.Params) {
+func RenderGraphiQL(config *GraphiQLOptions, w http.ResponseWriter, r *http.Request, params graphql.Params) {
 	t := template.New("GraphiQL")
 	t, err := t.Parse(graphiqlTemplate)
 	if err != nil {

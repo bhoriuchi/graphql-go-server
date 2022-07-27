@@ -1,4 +1,4 @@
-package server
+package ide
 
 import (
 	"fmt"
@@ -37,7 +37,7 @@ type playgroundData struct {
 }
 
 // renderPlayground renders the Playground GUI
-func renderPlayground(config *PlaygroundOptions, w http.ResponseWriter, r *http.Request) {
+func RenderPlayground(config *PlaygroundOptions, w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("CONFIG %+v\n", config)
 
 	t := template.New("Playground")

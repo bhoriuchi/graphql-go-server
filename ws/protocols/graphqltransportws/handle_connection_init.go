@@ -1,5 +1,7 @@
 package graphqltransportws
 
+import "fmt"
+
 var (
 	ConnectionInitReceived interface{} = "connectionInitReceived"
 	ConnectionAckKey       interface{} = "ConnectionAcknowledged"
@@ -7,25 +9,26 @@ var (
 
 // handleConnectionInit handles the connection init
 func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
-	c.mx.Lock()
+	c.initMx.Lock()
 
 	// check for initialisation requests
-	if c.ctx.ConnectionInitReceived() {
-		c.mx.Unlock()
-		c.logger.Errorf("%d: Too many initialisation requests", TooManyInitialisationRequests)
-		c.Close(TooManyInitialisationRequests, "Too many initialisation requests")
+	if c.connectionInitReceived {
+		c.initMx.Unlock()
+		err := fmt.Errorf("too many initialisation requests")
+		c.log.Errorf("%d: %s", TooManyInitialisationRequests, err)
+		c.setClose(TooManyInitialisationRequests, err.Error())
 		return
 	}
 
 	// set the initialization
-	c.ctx["connectionInitReceived"] = true
-	c.mx.Unlock()
+	c.connectionInitReceived = true
+	c.initMx.Unlock()
 
 	// check for payload
 	if msg.HasPayload() {
 		payload, err := msg.RecordPayload()
 		if err == nil {
-			c.ctx["connectionParams"] = payload
+			c.connectionParams = payload
 		}
 	}
 
@@ -37,10 +40,10 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 	)
 
 	if c.config.OnConnect != nil {
-		payloadOrPermitted, err = c.config.OnConnect(c, c.ctx)
+		payloadOrPermitted, err = c.config.OnConnect(c)
 		if err != nil {
-			c.logger.Errorf(err.Error())
-			c.Close(InternalServerError, err.Error())
+			c.log.Errorf("%d: %s", InternalServerError, err)
+			c.setClose(InternalServerError, err.Error())
 			return
 		}
 	}
@@ -48,8 +51,9 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 	switch v := payloadOrPermitted.(type) {
 	case bool:
 		if !v {
-			c.logger.Errorf("Forbidden")
-			c.Close(Forbidden, "Forbidden")
+			err := fmt.Errorf("Forbidden")
+			c.log.Errorf("%d: %s", err)
+			c.setClose(Forbidden, err.Error())
 			return
 		}
 		payload = nil
@@ -57,10 +61,9 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 		payload = v
 	}
 
-	c.outgoing <- OperationMessage{
-		Type:    MsgConnectionAck,
-		Payload: payload,
-	}
+	c.Send(NewAckMessage(payload))
 
-	c.ctx["acknowledged"] = true
+	c.ackMx.Lock()
+	c.acknowledged = true
+	c.ackMx.Unlock()
 }

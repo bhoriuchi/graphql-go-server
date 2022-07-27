@@ -10,6 +10,10 @@ import (
 	"github.com/graphql-go/graphql"
 )
 
+var (
+	ConnKey interface{} = "conn"
+)
+
 func (s *Server) newGraphQLWSConnection(ctx context.Context, r *http.Request, ws *websocket.Conn) {
 	// Establish a GraphQL WebSocket connection
 	graphqlws.NewConnection(ws, graphqlws.ConnectionConfig{

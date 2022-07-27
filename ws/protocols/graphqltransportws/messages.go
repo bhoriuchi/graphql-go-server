@@ -2,9 +2,9 @@ package graphqltransportws
 
 import (
 	"fmt"
-)
 
-type Record map[string]interface{}
+	"github.com/graphql-go/graphql/gqlerrors"
+)
 
 // RawMessage is the raw message data
 type RawMessage map[string]interface{}
@@ -55,13 +55,13 @@ func (m RawMessage) Payload() interface{} {
 }
 
 // PayloadRecord converts the payload to a record
-func (m RawMessage) RecordPayload() (Record, error) {
+func (m RawMessage) RecordPayload() (map[string]interface{}, error) {
 	payload, ok := m["payload"]
 	if !ok || payload == nil {
 		return nil, fmt.Errorf("message is missing the 'payload' property")
 	}
 
-	r := make(Record)
+	r := map[string]interface{}{}
 	err := ReMarshal(payload, &r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payload")
@@ -84,4 +84,57 @@ func (m RawMessage) SubscribePayload() (*SubscribePayload, error) {
 	}
 
 	return r, nil
+}
+
+// NewNextMessage creates a new next message
+func NewNextMessage(id string, payload *ExecutionResult) OperationMessage {
+	return OperationMessage{
+		ID:      id,
+		Type:    MsgNext,
+		Payload: payload,
+	}
+}
+
+// NewAckMesage creates a new ack message
+func NewAckMessage(payload interface{}) OperationMessage {
+	if payload != nil {
+		return OperationMessage{
+			Type: MsgConnectionAck,
+		}
+	}
+
+	return OperationMessage{
+		Type:    MsgConnectionAck,
+		Payload: payload,
+	}
+}
+
+// NewPingMesage creates a new ping message
+func NewPingMessage(payload interface{}) OperationMessage {
+	if payload != nil {
+		return OperationMessage{
+			Type: MsgPing,
+		}
+	}
+
+	return OperationMessage{
+		Type:    MsgPing,
+		Payload: payload,
+	}
+}
+
+func NewSubscribeMessage(id string, payload *SubscribePayload) OperationMessage {
+	return OperationMessage{
+		ID:      id,
+		Type:    MsgSubscribe,
+		Payload: payload,
+	}
+}
+
+func NewErrorMessage(id string, errs gqlerrors.FormattedErrors) OperationMessage {
+	return OperationMessage{
+		ID:      id,
+		Type:    MsgError,
+		Payload: errs,
+	}
 }
