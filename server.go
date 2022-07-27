@@ -7,7 +7,6 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/logger"
-	"github.com/bhoriuchi/graphql-go-server/ws/connection"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
 	"github.com/gorilla/websocket"
@@ -22,34 +21,30 @@ const (
 	ContentTypeFormURLEncoded = "application/x-www-form-urlencoded"
 )
 
-type Options struct {
-	Pretty             bool
-	RootValueFunc      RootValueFunc
-	FormatErrorFunc    FormatErrorFunc
-	ContextFunc        ContextFunc
-	WSContextFunc      ContextFunc
-	ResultCallbackFunc ResultCallbackFunc
-	Logger             logger.Logger
-	WS                 *WSOptions
-	Playground         *ide.PlaygroundOptions
-	GraphiQL           *ide.GraphiQLOptions
-}
+type RootValueFunc func(ctx context.Context, r *http.Request) map[string]interface{}
 
-type WSOptions struct {
-	AuthenticateFunc connection.AuthenticateFunc
-}
+type FormatErrorFunc func(err error) gqlerrors.FormattedError
 
+type ContextFunc func(r *http.Request) context.Context
+
+type ResultCallbackFunc func(ctx context.Context, params *graphql.Params, result *graphql.Result, responseBody []byte)
 type Server struct {
 	schema   graphql.Schema
 	log      logger.Logger
-	options  *Options
+	options  *serverOptions
 	upgrader websocket.Upgrader
 	mgr      *ChanMgr
 }
 
-func New(schema graphql.Schema, options *Options) *Server {
-	if options.Logger == nil {
-		options.Logger = &logger.NoopLogger{}
+func New(schema graphql.Schema, opts ...Option) *Server {
+	options := &serverOptions{
+		Logger:     &logger.NoopLogger{},
+		WS:         &WSOptions{},
+		Playground: ide.NewDefaultPlaygroundOptions(),
+	}
+
+	for _, opt := range opts {
+		opt(options)
 	}
 
 	return &Server{
@@ -69,18 +64,11 @@ func New(schema graphql.Schema, options *Options) *Server {
 	}
 }
 
-type RootValueFunc func(ctx context.Context, r *http.Request) map[string]interface{}
-
-type FormatErrorFunc func(err error) gqlerrors.FormattedError
-
-type ContextFunc func(r *http.Request) context.Context
-
-type ResultCallbackFunc func(ctx context.Context, params *graphql.Params, result *graphql.Result, responseBody []byte)
-
+// isWSUpgrade identifies a websocket upgrade
 func isWSUpgrade(r *http.Request) bool {
-	connection := strings.ToLower(r.Header.Get("Connection"))
-	upgrade := strings.ToLower(r.Header.Get("Upgrade"))
-	return connection == "upgrade" && upgrade == "websocket"
+	connection := strings.EqualFold(r.Header.Get("Connection"), "upgrade")
+	upgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	return connection && upgrade
 }
 
 // ServeHTTP provides an entrypoint into executing graphQL queries.

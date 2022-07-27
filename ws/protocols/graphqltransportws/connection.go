@@ -73,6 +73,7 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 		acknowledged:           false,
 		closeCode:              Noop,
 		closeReason:            "",
+		mgr:                    manager.NewManager(),
 	}
 
 	// validate the subprotocol

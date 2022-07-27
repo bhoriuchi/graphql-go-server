@@ -14,6 +14,12 @@ type Manager struct {
 	subscriptions map[string]*Subscription
 }
 
+func NewManager() *Manager {
+	return &Manager{
+		subscriptions: map[string]*Subscription{},
+	}
+}
+
 // Subscription interface between ws and graphql execution
 type Subscription struct {
 	Channel      chan *graphql.Result

@@ -244,6 +244,8 @@ func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.R
 		return
 	}
 
+	s.log.Debugf("Client requested %q subprotocol", ws.Subprotocol())
+
 	// Close the connection early if it doesn't implement a supported protocol
 	switch ws.Subprotocol() {
 	// graphql-ws protocol
