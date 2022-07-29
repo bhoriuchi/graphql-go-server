@@ -236,6 +236,7 @@ func (s *Server) ContextHandler(ctx context.Context, w http.ResponseWriter, r *h
 // WSHandler handles websocket connection upgrade
 func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	// Establish a WebSocket connection
+	s.log.Debugf("upgrading connection to websocket")
 	var ws, err = s.upgrader.Upgrade(w, r, nil)
 
 	// Bail out if the WebSocket connection could not be established
@@ -250,12 +251,19 @@ func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.R
 	switch ws.Subprotocol() {
 	// graphql-ws protocol
 	case graphqlws.Subprotocol:
-		s.newGraphQLWSConnection(ctx, r, ws)
+		graphqlws.NewConnection(ctx, graphqlws.Config{
+			WS:            ws,
+			Request:       r,
+			Schema:        &s.schema,
+			Logger:        s.log,
+			RootValueFunc: s.options.RootValueFunc,
+		})
 
 	// graphql-transport-ws protocol
 	case graphqltransportws.Subprotocol:
 		graphqltransportws.NewConnection(ctx, graphqltransportws.Config{
 			WS:            ws,
+			Request:       r,
 			Schema:        &s.schema,
 			Logger:        s.log,
 			RootValueFunc: s.options.RootValueFunc,

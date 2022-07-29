@@ -3,6 +3,8 @@ package graphqltransportws
 import (
 	"fmt"
 
+	"github.com/bhoriuchi/graphql-go-server/utils"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/graphql-go/graphql/gqlerrors"
 )
 
@@ -29,13 +31,13 @@ func (m RawMessage) stringField(name string) (string, error) {
 }
 
 // Type validates and extracts the type field value from a raw message
-func (m RawMessage) Type() (MessageType, error) {
+func (m RawMessage) Type() (protocols.MessageType, error) {
 	str, err := m.stringField("type")
 	if err != nil {
 		return "", err
 	}
 
-	return MessageType(str), nil
+	return protocols.MessageType(str), nil
 }
 
 // ID validates and extracts the id field value from a raw message
@@ -62,7 +64,7 @@ func (m RawMessage) RecordPayload() (map[string]interface{}, error) {
 	}
 
 	r := map[string]interface{}{}
-	err := ReMarshal(payload, &r)
+	err := utils.ReMarshal(payload, &r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payload")
 	}
@@ -78,7 +80,7 @@ func (m RawMessage) SubscribePayload() (*SubscribePayload, error) {
 	}
 
 	r := &SubscribePayload{}
-	err := ReMarshal(payload, r)
+	err := utils.ReMarshal(payload, r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payload")
 	}
@@ -87,54 +89,68 @@ func (m RawMessage) SubscribePayload() (*SubscribePayload, error) {
 }
 
 // NewNextMessage creates a new next message
-func NewNextMessage(id string, payload *ExecutionResult) OperationMessage {
-	return OperationMessage{
+func NewNextMessage(id string, payload *ExecutionResult) protocols.OperationMessage {
+	return protocols.OperationMessage{
 		ID:      id,
-		Type:    MsgNext,
+		Type:    protocols.MsgNext,
 		Payload: payload,
 	}
 }
 
 // NewAckMesage creates a new ack message
-func NewAckMessage(payload interface{}) OperationMessage {
+func NewAckMessage(payload interface{}) protocols.OperationMessage {
 	if payload != nil {
-		return OperationMessage{
-			Type: MsgConnectionAck,
+		return protocols.OperationMessage{
+			Type: protocols.MsgConnectionAck,
 		}
 	}
 
-	return OperationMessage{
-		Type:    MsgConnectionAck,
+	return protocols.OperationMessage{
+		Type:    protocols.MsgConnectionAck,
 		Payload: payload,
 	}
 }
 
 // NewPingMesage creates a new ping message
-func NewPingMessage(payload interface{}) OperationMessage {
+func NewPingMessage(payload interface{}) protocols.OperationMessage {
 	if payload != nil {
-		return OperationMessage{
-			Type: MsgPing,
+		return protocols.OperationMessage{
+			Type: protocols.MsgPing,
 		}
 	}
 
-	return OperationMessage{
-		Type:    MsgPing,
+	return protocols.OperationMessage{
+		Type:    protocols.MsgPing,
 		Payload: payload,
 	}
 }
 
-func NewSubscribeMessage(id string, payload *SubscribePayload) OperationMessage {
-	return OperationMessage{
-		ID:      id,
-		Type:    MsgSubscribe,
+// NewPongMesage creates a new pong message
+func NewPongMessage(payload interface{}) protocols.OperationMessage {
+	if payload != nil {
+		return protocols.OperationMessage{
+			Type: protocols.MsgPong,
+		}
+	}
+
+	return protocols.OperationMessage{
+		Type:    protocols.MsgPong,
 		Payload: payload,
 	}
 }
 
-func NewErrorMessage(id string, errs gqlerrors.FormattedErrors) OperationMessage {
-	return OperationMessage{
+func NewSubscribeMessage(id string, payload *SubscribePayload) protocols.OperationMessage {
+	return protocols.OperationMessage{
 		ID:      id,
-		Type:    MsgError,
+		Type:    protocols.MsgSubscribe,
+		Payload: payload,
+	}
+}
+
+func NewErrorMessage(id string, errs gqlerrors.FormattedErrors) protocols.OperationMessage {
+	return protocols.OperationMessage{
+		ID:      id,
+		Type:    protocols.MsgError,
 		Payload: errs,
 	}
 }

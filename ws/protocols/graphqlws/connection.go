@@ -2,272 +2,245 @@ package graphqlws
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/logger"
-	"github.com/bhoriuchi/graphql-go-server/ws/connection"
+	"github.com/bhoriuchi/graphql-go-server/ws/manager"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/graphql-go/graphql"
 )
-
-// ConnectionEventHandlers define the event handlers for a connection.
-// Event handlers allow other system components to react to events such
-// as the connection closing or an operation being started or stopped.
-type ConnectionEventHandlers struct {
-	// Close is called whenever the connection is closed, regardless of
-	// whether this happens because of an error or a deliberate termination
-	// by the client.
-	Close func(connection.Connection)
-
-	// StartOperation is called whenever the client demands that a GraphQL
-	// operation be started (typically a subscription). Event handlers
-	// are expected to take the necessary steps to register the operation
-	// and send data back to the client with the results eventually.
-	StartOperation func(connection.Connection, string, *StartMessagePayload) []error
-
-	// StopOperation is called whenever the client stops a previously
-	// started GraphQL operation (typically a subscription). Event handlers
-	// are expected to unregister the operation and stop sending result
-	// data to the client.
-	StopOperation func(connection.Connection, string)
-}
 
 // ConnectionConfig defines the configuration parameters of a
 // GraphQL WebSocket connection.
-type ConnectionConfig struct {
-	Logger        logger.Logger
-	Authenticate  connection.AuthenticateFunc
-	EventHandlers ConnectionEventHandlers
+type Config struct {
+	WS                  *websocket.Conn
+	Schema              *graphql.Schema
+	Logger              *logger.LogWrapper
+	Request             *http.Request
+	RootValueFunc       func(ctx context.Context, r *http.Request) map[string]interface{}
+	KeepAlive           time.Duration
+	OnConnect           func(c *wsConnection, payload interface{}) interface{}
+	OnDisconnect        func(c *wsConnection)
+	OnOperation         func(c *wsConnection, msg StartMessage, params graphql.Params) (graphql.Params, error)
+	OnOperationComplete func(c *wsConnection, id string)
 }
 
-/**
- * The default implementation of the Connection interface.
- */
-
+// wsConnection defines a connection context
 type wsConnection struct {
-	id         string
-	ws         *websocket.Conn
-	config     ConnectionConfig
-	logger     logger.Logger
-	outgoing   chan OperationMessage
-	closeMutex *sync.Mutex
-	closed     bool
-	context    context.Context
+	id                     string
+	ctx                    context.Context
+	ws                     *websocket.Conn
+	schema                 *graphql.Schema
+	config                 Config
+	log                    *logger.LogWrapper
+	outgoing               chan protocols.OperationMessage
+	ka                     chan struct{}
+	closeMx                sync.RWMutex
+	initMx                 sync.RWMutex
+	closed                 bool
+	mgr                    *manager.Manager
+	connectionParams       map[string]interface{}
+	connectionInitReceived bool
 }
 
 // NewConnection establishes a GraphQL WebSocket connection. It implements
 // the GraphQL WebSocket protocol by managing its internal state and handling
 // the client-server communication.
-func NewConnection(ws *websocket.Conn, config ConnectionConfig) connection.Connection {
-	conn := new(wsConnection)
-	conn.id = uuid.New().String()
-	conn.ws = ws
-	conn.context = context.Background()
-	conn.config = config
-	conn.logger = config.Logger
-	conn.closed = false
-	conn.closeMutex = &sync.Mutex{}
-	conn.outgoing = make(chan OperationMessage)
+func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
+	id := uuid.NewString()
+	l := config.Logger.
+		WithField("connectionId", id).
+		WithField("subprotocol", Subprotocol)
 
-	go conn.writeLoop()
-	go conn.readLoop()
-	conn.logger.Infof("Created connection")
-
-	return conn
-}
-
-func (conn *wsConnection) ID() string {
-	return conn.id
-}
-
-func (conn *wsConnection) Context() context.Context {
-	return conn.context
-}
-
-func (conn *wsConnection) WS() *websocket.Conn {
-	return conn.ws
-}
-
-func (conn *wsConnection) SendData(opID string, data interface{}) {
-	msg := operationMessageForType(MsgData)
-	msg.ID = opID
-	msg.Payload = data
-	conn.closeMutex.Lock()
-	if !conn.closed {
-		conn.outgoing <- msg
-	}
-	conn.closeMutex.Unlock()
-}
-
-func (conn *wsConnection) SendError(err error) {
-	msg := operationMessageForType(MsgError)
-	msg.Payload = err.Error()
-	conn.closeMutex.Lock()
-	if !conn.closed {
-		conn.outgoing <- msg
-	}
-	conn.closeMutex.Unlock()
-}
-
-func (conn *wsConnection) sendOperationErrors(opID string, errs []error) {
-	if conn.closed {
-		return
+	c := &wsConnection{
+		id:       id,
+		ctx:      ctx,
+		schema:   config.Schema,
+		ws:       config.WS,
+		config:   config,
+		log:      l,
+		closed:   false,
+		outgoing: make(chan protocols.OperationMessage),
+		ka:       make(chan struct{}),
+		mgr:      manager.NewManager(),
 	}
 
-	msg := operationMessageForType(MsgError)
-	msg.ID = opID
-	msg.Payload = errs
-	conn.closeMutex.Lock()
-	if !conn.closed {
-		conn.outgoing <- msg
+	// validate the subprotocol
+	if c.ws.Subprotocol() != Subprotocol {
+		err := fmt.Errorf("subprotocol %q not acceptable", c.ws.Subprotocol())
+		c.log.WithError(err).Errorf("failed to create connection")
+		c.ws.WriteMessage(int(ProtocolError), []byte(err.Error()))
+		time.Sleep(10 * time.Millisecond)
+		c.ws.Close()
+		return nil, err
 	}
 
-	conn.closeMutex.Unlock()
+	go c.writeLoop()
+	go c.readLoop()
+
+	return c, nil
 }
 
-func (conn *wsConnection) close() {
-	// Close the write loop by closing the outgoing messages channels
-	conn.closeMutex.Lock()
-	conn.closed = true
-	close(conn.outgoing)
-	conn.closeMutex.Unlock()
+func (c *wsConnection) ID() string {
+	return c.id
+}
 
-	// Notify event handlers
-	if conn.config.EventHandlers.Close != nil {
-		conn.config.EventHandlers.Close(conn)
+func (c *wsConnection) Context() context.Context {
+	return c.ctx
+}
+
+func (c *wsConnection) WS() *websocket.Conn {
+	return c.ws
+}
+
+func (c *wsConnection) C() chan protocols.OperationMessage {
+	return c.outgoing
+}
+
+// ConnectionInitReceived
+func (c *wsConnection) ConnectionInitReceived() bool {
+	c.initMx.RLock()
+	defer c.initMx.RUnlock()
+	return c.connectionInitReceived
+}
+
+// ConnectionParams
+func (c *wsConnection) ConnectionParams() interface{} {
+	return c.connectionParams
+}
+
+// Send sends a message
+func (c *wsConnection) sendMessage(msg protocols.OperationMessage) {
+	if !c.isClosed() {
+		c.outgoing <- msg
+	}
+}
+
+// close closes the connection
+func (c *wsConnection) close(code CloseCode, msg string) {
+	c.closeMx.Lock()
+	c.closed = true
+	c.closeMx.Unlock()
+
+	c.mgr.UnsubscribeAll()
+
+	if c.config.OnDisconnect != nil {
+		c.config.OnDisconnect(c)
 	}
 
-	conn.logger.Infof("closed connection")
+	// close the outgoing channels
+	close(c.ka)
+	close(c.outgoing)
+	c.ws.Close()
+	c.log.Infof("closed connection")
 }
 
-func (conn *wsConnection) writeLoop() {
+func (c *wsConnection) writeLoop() {
 	// Close the WebSocket connection when leaving the write loop;
 	// this ensures the read loop is also terminated and the connection
 	// closed cleanly
-	defer conn.ws.Close()
+	defer c.ws.Close()
 
 	for {
-		msg, ok := <-conn.outgoing
-		// Close the write loop when the outgoing messages channel is closed;
-		// this will close the connection
-		if !ok {
+		if c.isClosed() {
 			return
 		}
 
+		msg, ok := <-c.outgoing
+		// Close the write loop when the outgoing messages channel is closed;
+		// this will close the connection
+		if !ok {
+			break
+		}
+
 		// conn.logger.Debugf("send message: %s", msg.String())
-		conn.ws.SetWriteDeadline(time.Now().Add(WriteTimeout))
+		c.ws.SetWriteDeadline(time.Now().Add(WriteTimeout))
 
 		// Send the message to the client; if this times out, the WebSocket
 		// connection will be corrupt, hence we need to close the write loop
 		// and the connection immediately
-		if err := conn.ws.WriteJSON(msg); err != nil {
-			conn.logger.Warnf("sending message failed: %s", err)
+		if err := c.ws.WriteJSON(msg); err != nil {
+			c.log.WithError(err).Warnf("failed to write message")
 			return
 		}
 	}
 }
 
-func (conn *wsConnection) readLoop() {
+func (c *wsConnection) readLoop() {
 	// Close the WebSocket connection when leaving the read loop
-	defer conn.ws.Close()
-	conn.ws.SetReadLimit(ReadLimit)
+	defer c.ws.Close()
 
 	for {
-		// Read the next message received from the client
-		rawPayload := json.RawMessage{}
-		msg := OperationMessage{
-			Payload: &rawPayload,
+		if c.isClosed() {
+			break
 		}
-		err := conn.ws.ReadJSON(&msg)
+
+		// Read the next message received from the client
+		msg := &protocols.OperationMessage{}
+		err := c.ws.ReadJSON(msg)
 
 		// If this causes an error, close the connection and read loop immediately;
 		// see https://github.com/gorilla/websocket/blob/master/conn.go#L924 for
 		// more information on why this is necessary
 		if err != nil {
-			conn.logger.Warnf("force closing connection: %s", err)
-			conn.close()
-			return
-		}
+			// look for a normal closure and exit
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+				c.log.Debugf("gracefully closing connection with normal closure")
+				c.close(NormalClosure, "")
+				break
+			}
 
-		// conn.logger.Debugf("received message (%s): %s", msg.ID, msg.Type)
+			c.log.WithError(err).Errorf("force closing connection")
+			c.sendError("", protocols.MsgConnectionError, map[string]interface{}{
+				"message": err.Error(),
+			})
+			time.Sleep(10 * time.Millisecond)
+			c.close(UnexpectedCondition, err.Error())
+			break
+		}
 
 		switch msg.Type {
-		case MsgConnectionAuth:
-			data := map[string]interface{}{}
-			if err := json.Unmarshal(rawPayload, &data); err != nil {
-				conn.logger.Errorf("Invalid %s data: %v", msg.Type, err)
-				conn.SendError(errors.New("invalid GQL_CONNECTION_AUTH payload"))
-			} else {
-				if conn.config.Authenticate != nil {
-					ctx, err := conn.config.Authenticate(data, conn)
-					if err != nil {
-						msg := operationMessageForType(MsgConnectionError)
-						msg.Payload = fmt.Sprintf("Failed to authenticate user: %v", err)
-						conn.outgoing <- msg
-					} else {
-						conn.context = ctx
-					}
-				}
-			}
 
-		// When the GraphQL WS connection is initiated, send an ACK back
-		case MsgConnectionInit:
-			data := map[string]interface{}{}
-			if err := json.Unmarshal(rawPayload, &data); err != nil {
-				conn.logger.Errorf("Invalid %s data: %v", msg.Type, err)
-				conn.SendError(errors.New("invalid GQL_CONNECTION_INIT payload"))
-			} else {
-				if conn.config.Authenticate != nil {
-					ctx, err := conn.config.Authenticate(data, conn)
-					if err != nil {
-						msg := operationMessageForType(MsgConnectionError)
-						msg.Payload = fmt.Sprintf("Failed to authenticate user: %v", err)
-						conn.outgoing <- msg
-					} else {
-						conn.context = ctx
-						conn.outgoing <- operationMessageForType(MsgConnectionAck)
-					}
-				} else {
-					conn.outgoing <- operationMessageForType(MsgConnectionAck)
-				}
-			}
+		case protocols.MsgConnectionInit:
+			c.handleConnectionInit(msg)
 
-		// Let event handlers deal with starting operations
-		case MsgStart:
-			if conn.config.EventHandlers.StartOperation != nil {
-				data := StartMessagePayload{}
-				if err := json.Unmarshal(rawPayload, &data); err != nil {
-					conn.SendError(errors.New("invalid GQL_START payload"))
-				} else {
-					errs := conn.config.EventHandlers.StartOperation(conn, msg.ID, &data)
-					if errs != nil {
-						conn.sendOperationErrors(msg.ID, errs)
-					}
-				}
-			}
+		case protocols.MsgConnectionTerminate:
+			c.handleConnectionTerminate(msg)
 
-		// Let event handlers deal with stopping operations
-		case MsgStop:
-			if conn.config.EventHandlers.StopOperation != nil {
-				conn.config.EventHandlers.StopOperation(conn, msg.ID)
-			}
+		case protocols.MsgStart:
+			c.handleStart(msg)
 
-		// When the GraphQL WS connection is terminated by the client,
-		// close the connection and close the read loop
-		case MsgConnectionTerminate:
-			// conn.logger.Debugf("connection terminated by client")
-			conn.close()
-			return
+		case protocols.MsgStop:
+			c.handleStop(msg)
 
-		// GraphQL WS protocol messages that are not handled represent
-		// a bug in our implementation; make this very obvious by logging
-		// an error
 		default:
-			conn.logger.Errorf("unhandled message: %s", msg.String())
+			err := fmt.Errorf("unhandled message type %q", msg.Type)
+			c.log.WithError(err).Errorf("failed to handle message")
+			c.sendError(msg.ID, protocols.MsgError, map[string]interface{}{
+				"message": err.Error(),
+			})
 		}
 	}
+}
+
+// isClosed returns true if the connection is closed
+func (c *wsConnection) isClosed() bool {
+	c.closeMx.RLock()
+	defer c.closeMx.RUnlock()
+	return c.closed
+}
+
+// handleGQLErrors handles graphql errors
+func (c *wsConnection) sendError(id string, t protocols.MessageType, errs interface{}) error {
+	c.sendMessage(protocols.OperationMessage{
+		ID:      id,
+		Type:    t,
+		Payload: errs,
+	})
+	return nil
 }

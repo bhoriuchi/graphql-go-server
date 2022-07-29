@@ -1,31 +1,18 @@
 package graphqltransportws
 
 import (
-	"encoding/json"
 	"time"
 
+	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/graphql-go/graphql/gqlerrors"
 )
-
-// MessageType is a message type
-type MessageType string
 
 // CloseCode a closing code
 type CloseCode int
 
 const (
-	// Subprotocol
+	// Subprotocol - https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md
 	Subprotocol = "graphql-transport-ws"
-
-	// Message types
-	MsgConnectionInit MessageType = "connection_init"
-	MsgConnectionAck  MessageType = "connection_ack"
-	MsgPing           MessageType = "ping"
-	MsgPong           MessageType = "pong"
-	MsgSubscribe      MessageType = "subscribe"
-	MsgNext           MessageType = "next"
-	MsgError          MessageType = "error"
-	MsgComplete       MessageType = "complete"
 
 	// Close codes
 	Noop                             CloseCode = -1
@@ -43,33 +30,25 @@ const (
 	TooManyInitialisationRequests    CloseCode = 4429
 
 	// Thresholds
-	ReadLimit    = 4096
 	WriteTimeout = 10 * time.Second
 )
 
-// OperationMessage
-type OperationMessage struct {
-	ID      string      `json:"id,omitempty"`
-	Type    MessageType `json:"type"`
-	Payload interface{} `json:"payload,omitempty"`
-}
-
 type CompleteMessage struct {
-	ID   string      `json:"id"`
-	Type MessageType `json:"type"`
+	ID   string                `json:"id"`
+	Type protocols.MessageType `json:"type"`
 }
 
 // ErrorMessage
 type ErrorMessage struct {
 	ID      string                    `json:"id"`
-	Type    MessageType               `json:"type"`
+	Type    protocols.MessageType     `json:"type"`
 	Payload gqlerrors.FormattedErrors `json:"payload"`
 }
 
 type SubscribeMessage struct {
-	ID      string           `json:"id"`
-	Type    MessageType      `json:"type"`
-	Payload SubscribePayload `json:"payload"`
+	ID      string                `json:"id"`
+	Type    protocols.MessageType `json:"type"`
+	Payload SubscribePayload      `json:"payload"`
 }
 
 // SubscribePayload payload for a subscribe operation
@@ -81,9 +60,9 @@ type SubscribePayload struct {
 }
 
 type NextMessage struct {
-	ID      string          `json:"id"`
-	Type    MessageType     `json:"type"`
-	Payload ExecutionResult `json:"payload"`
+	ID      string                `json:"id"`
+	Type    protocols.MessageType `json:"type"`
+	Payload ExecutionResult       `json:"payload"`
 }
 
 // ExecutionResult result of an execution
@@ -94,13 +73,4 @@ type ExecutionResult struct {
 	Label      *string                   `json:"label,omitempty"` // patch result
 	HasNext    *bool                     `json:"hasNext,omitempty"`
 	Extensions map[string]interface{}    `json:"extensions,omitempty"`
-}
-
-// ReMarshal converts one type to another
-func ReMarshal(in, out interface{}) error {
-	b, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
 }

@@ -6,37 +6,41 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/metadata"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 )
 
 // handleSubscribe manages a subscribe operation
 func (c *wsConnection) handleSubscribe(msg *RawMessage) {
+	c.log.Tracef("received SUBSCRIBE message")
+
 	id, err := msg.ID()
 	if err != nil {
-		c.log.Errorf("%d: %s", BadRequest, err)
 		c.setClose(BadRequest, err.Error())
+		c.log.WithField("error", err).WithField("code", c.closeCode).Errorf("subscribe operation failed")
 		return
 	}
 
+	subLog := c.log.WithField("subscriptionId", id)
+
 	if !c.Acknowledged() {
-		err := fmt.Errorf("Unauthorized")
-		c.log.Errorf("%d: %s", Unauthorized, err)
 		c.setClose(Unauthorized, err.Error())
+		subLog.WithField("code", Unauthorized).Warnf("attempted subscribe operation before connection is acknowledged")
 		return
 	}
 
 	if c.mgr.HasSubscription(id) {
 		err := fmt.Errorf("subscriber for %s already exists", id)
-		c.log.Errorf("%d: %s", SubscriberAlreadyExists, err)
 		c.setClose(SubscriberAlreadyExists, err.Error())
+		subLog.WithField("code", c.closeCode).Errorf("failed subscribe operation")
 		return
 	}
 
 	payload, err := msg.SubscribePayload()
 	if err != nil {
-		c.log.Errorf("%d: %s", BadRequest, err)
 		c.setClose(BadRequest, err.Error())
+		c.log.WithField("error", err).WithField("code", c.closeCode).Errorf("invalid subscribe message payload")
 		return
 	}
 
@@ -45,7 +49,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	if c.config.OnSubscribe != nil {
 		maybeExecArgsOrErrors, err := c.config.OnSubscribe(c, SubscribeMessage{
 			ID:      id,
-			Type:    MsgSubscribe,
+			Type:    protocols.MsgSubscribe,
 			Payload: *payload,
 		})
 		if err != nil {
@@ -114,36 +118,56 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 		RootObject:     params.RootObject,
 	}
 
-	resultChannel := graphql.Subscribe(args)
-	c.mgr.Subscribe(&manager.Subscription{
-		Channel:      resultChannel,
-		ConnectionID: c.ID(),
-		OperationID:  id,
-		Context:      ctx,
-		CancelFunc:   cancelFunc,
-	})
+	subName := args.OperationName
+	if subName == "" {
+		subName = "Unnamed Subscription"
+	}
 
+	resultChannel := graphql.Subscribe(args)
+	if err := c.mgr.Subscribe(&manager.Subscription{
+		Channel:       resultChannel,
+		ConnectionID:  c.ID(),
+		OperationID:   id,
+		OperationName: subName,
+		Context:       ctx,
+		CancelFunc:    cancelFunc,
+	}); err != nil {
+		c.log.Errorf("%d: %s", InternalServerError, err)
+		c.setClose(InternalServerError, err.Error())
+		return
+	}
+
+	c.log.Tracef("subscription %q SUBSCRIBED", subName)
 	go func() {
+		// ensure subscription is always unsubscribed when finished
+		defer func() {
+			c.mgr.Unsubscribe(id)
+			c.log.Debugf("subscription %q UNSUBSCRIBED", subName)
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
+				c.log.Tracef("exiting subscription %q", subName)
 				return
 
 			case res, more := <-resultChannel:
 				if !more {
+					c.log.Tracef("subscription %q has no more messages, unsubscribing", subName)
 					// if the result channel is finished, send a complete message
-					out := OperationMessage{
+					out := protocols.OperationMessage{
 						ID:   id,
-						Type: MsgComplete,
+						Type: protocols.MsgComplete,
 					}
 
 					if c.config.OnComplete != nil {
 						c.config.OnComplete(c, CompleteMessage{
 							ID:   id,
-							Type: MsgComplete,
+							Type: protocols.MsgComplete,
 						})
 					}
 
+					// send the complete message if the subscription is active
 					if c.mgr.HasSubscription(id) {
 						c.Send(out)
 					}
@@ -151,9 +175,10 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 					return
 				}
 
-				if res.HasErrors() && res.Data == nil {
+				// if the response is all errors, close the result and send errors
+				if len(res.Errors) == 1 && res.Data == nil {
 					if err := c.handleGQLErrors(id, res.Errors); err != nil {
-						c.log.Errorf("%d: %s", InternalServerError, err)
+						c.log.WithError(err).Errorf("unsubscribing")
 						c.setClose(InternalServerError, err.Error())
 						return
 					}
@@ -170,14 +195,14 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 							c,
 							NextMessage{
 								ID:      id,
-								Type:    MsgNext,
+								Type:    protocols.MsgNext,
 								Payload: execResult,
 							},
 							args,
 							res,
 						)
 						if err != nil {
-							c.log.Errorf("%d: %s", InternalServerError, err.Error())
+							c.log.WithError(err).Errorf("unsubscribing")
 							c.setClose(InternalServerError, err.Error())
 							return
 						}
@@ -185,7 +210,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 							execResult, ok := maybeResult.(*ExecutionResult)
 							if !ok {
 								err := fmt.Errorf("onNext hook expected return type of ExecutionResult but got %T", maybeResult)
-								c.log.Errorf("%d: %s", InternalServerError, err)
+								c.log.WithError(err).Errorf("unsubscribing")
 								c.setClose(InternalServerError, err.Error())
 								return
 							}

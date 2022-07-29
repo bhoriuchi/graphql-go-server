@@ -1,17 +1,16 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/logger"
+	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
-	"github.com/graphql-go/graphql/gqlerrors"
 )
 
 // Constants
@@ -21,25 +20,16 @@ const (
 	ContentTypeFormURLEncoded = "application/x-www-form-urlencoded"
 )
 
-type RootValueFunc func(ctx context.Context, r *http.Request) map[string]interface{}
-
-type FormatErrorFunc func(err error) gqlerrors.FormattedError
-
-type ContextFunc func(r *http.Request) context.Context
-
-type ResultCallbackFunc func(ctx context.Context, params *graphql.Params, result *graphql.Result, responseBody []byte)
 type Server struct {
 	schema   graphql.Schema
-	log      logger.Logger
-	options  *serverOptions
+	log      *logger.LogWrapper
+	options  *options.Options
 	upgrader websocket.Upgrader
-	mgr      *ChanMgr
 }
 
-func New(schema graphql.Schema, opts ...Option) *Server {
-	options := &serverOptions{
-		Logger:     &logger.NoopLogger{},
-		WS:         &WSOptions{},
+func New(schema graphql.Schema, opts ...options.Option) *Server {
+	options := &options.Options{
+		LogFunc:    logger.NoopLogFunc,
 		Playground: ide.NewDefaultPlaygroundOptions(),
 	}
 
@@ -49,7 +39,7 @@ func New(schema graphql.Schema, opts ...Option) *Server {
 
 	return &Server{
 		schema:  schema,
-		log:     options.Logger,
+		log:     logger.NewLogWrapper(options.LogFunc, nil),
 		options: options,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -58,33 +48,30 @@ func New(schema graphql.Schema, opts ...Option) *Server {
 				graphqlws.Subprotocol,
 			},
 		},
-		mgr: &ChanMgr{
-			conns: make(map[string]map[string]*ResultChan),
-		},
 	}
 }
 
 // isWSUpgrade identifies a websocket upgrade
-func isWSUpgrade(r *http.Request) bool {
-	connection := strings.EqualFold(r.Header.Get("Connection"), "upgrade")
-	upgrade := strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-	return connection && upgrade
+func (s *Server) isWSUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
 // ServeHTTP provides an entrypoint into executing graphQL queries.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if isWSUpgrade(r) {
-		s.log.Debugf("Upgrading connection to websocket")
-		ctx := r.Context()
+	ctx := r.Context()
+
+	if s.isWSUpgrade(r) {
+		s.log.Debugf("upgrading connection to websocket")
+
 		if s.options.WSContextFunc != nil {
-			ctx = s.options.WSContextFunc(r)
+			ctx = s.options.WSContextFunc(options.RequestTypeWS, r)
 		}
 		s.WSHandler(ctx, w, r)
-	} else {
-		ctx := r.Context()
-		if s.options.ContextFunc != nil {
-			ctx = s.options.ContextFunc(r)
-		}
-		s.ContextHandler(ctx, w, r)
+		return
 	}
+
+	if s.options.ContextFunc != nil {
+		ctx = s.options.ContextFunc(options.RequestTypeHTTP, r)
+	}
+	s.ContextHandler(ctx, w, r)
 }

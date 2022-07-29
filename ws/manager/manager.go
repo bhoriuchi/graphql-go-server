@@ -22,11 +22,12 @@ func NewManager() *Manager {
 
 // Subscription interface between ws and graphql execution
 type Subscription struct {
-	Channel      chan *graphql.Result
-	ConnectionID string
-	OperationID  string
-	Context      context.Context
-	CancelFunc   context.CancelFunc
+	Channel       chan *graphql.Result
+	ConnectionID  string
+	OperationID   string
+	OperationName string
+	Context       context.Context
+	CancelFunc    context.CancelFunc
 }
 
 // unsubscribe unsubscribes
@@ -59,7 +60,7 @@ func (m *Manager) Subscribe(sub *Subscription) error {
 }
 
 // Unsubscribe removes a single operation
-func (m *Manager) Unsubscribe(operationID string) {
+func (m *Manager) Unsubscribe(operationID string) *Subscription {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
@@ -68,6 +69,8 @@ func (m *Manager) Unsubscribe(operationID string) {
 		sub.unsubscribe()
 		delete(m.subscriptions, operationID)
 	}
+
+	return sub
 }
 
 // Unsubscribe all unsubscribes and removes all operations for a specific connection id

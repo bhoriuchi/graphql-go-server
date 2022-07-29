@@ -1,6 +1,10 @@
 package logger
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // Level type
 type Level uint32
@@ -20,67 +24,147 @@ const (
 	TraceLevel
 )
 
-type Logger interface {
-	Errorf(format string, data ...interface{})
-	Warnf(format string, data ...interface{})
-	Infof(format string, data ...interface{})
-	Debugf(format string, data ...interface{})
-	Tracef(format string, data ...interface{})
+var LevelMap = map[Level]string{
+	ErrorLevel: "error",
+	WarnLevel:  "warn",
+	InfoLevel:  "info",
+	DebugLevel: "debug",
+	TraceLevel: "trace",
 }
 
-type NoopLogger struct{}
-
-func (n *NoopLogger) Errorf(format string, data ...interface{}) {}
-func (n *NoopLogger) Warnf(format string, data ...interface{})  {}
-func (n *NoopLogger) Infof(format string, data ...interface{})  {}
-func (n *NoopLogger) Debugf(format string, data ...interface{}) {}
-func (n *NoopLogger) Tracef(format string, data ...interface{}) {}
-
-type SimpleLogger struct {
-	level Level
+type LogPayload struct {
+	Level   Level
+	Fields  map[string]interface{}
+	Error   error
+	Message string
 }
 
-func NewSimpleLogger() *SimpleLogger {
-	return &SimpleLogger{
-		level: InfoLevel,
+type LogFunc func(payload LogPayload)
+
+func NoopLogFunc(payload LogPayload) {}
+
+// NewSimpleLogFunc returns a simple logging func
+func NewSimpleLogFunc(level Level) LogFunc {
+	return func(payload LogPayload) {
+		if level < payload.Level {
+			return
+		}
+
+		fields := []string{}
+		m := map[string]interface{}{}
+		keys := []string{"msg", "level", "error"}
+
+		for k, v := range payload.Fields {
+			if k != "msg" && k != "level" {
+				keys = append(keys, k)
+				m[k] = v
+			}
+		}
+
+		m["msg"] = payload.Message
+		m["level"] = LevelMap[level]
+
+		if payload.Error != nil {
+			m["error"] = payload.Error
+		}
+
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			v := m[k]
+			fields = append(fields, fmt.Sprintf("%s=%q", k, v))
+		}
+
+		fmt.Println(strings.Join(fields, " "))
 	}
 }
 
-func (s *SimpleLogger) SetLevel(level Level) {
-	s.level = level
+type LogWrapper struct {
+	LogFunc LogFunc
+	Fields  map[string]interface{}
+	Error   error
 }
 
-func (s *SimpleLogger) logf(level, format string, data ...interface{}) {
-	txt := fmt.Sprintf(format, data...)
-	fmt.Printf("[%s] %s\n", level, txt)
-}
+// NewLogWrapper returns a new log wrapper
+func NewLogWrapper(logFunc LogFunc, fields map[string]interface{}) *LogWrapper {
+	if fields == nil {
+		fields = map[string]interface{}{}
+	}
 
-func (s *SimpleLogger) Errorf(format string, data ...interface{}) {
-	if s.level >= ErrorLevel {
-		s.logf("ERROR", format, data...)
+	return &LogWrapper{
+		LogFunc: logFunc,
+		Fields:  fields,
 	}
 }
 
-func (s *SimpleLogger) Warnf(format string, data ...interface{}) {
-	if s.level >= WarnLevel {
-		s.logf("WARN", format, data...)
+// clone clones a log wrapper to iteratively build the log
+func (l *LogWrapper) clone() *LogWrapper {
+	newWrapper := &LogWrapper{
+		LogFunc: l.LogFunc,
+		Error:   l.Error,
+		Fields:  map[string]interface{}{},
 	}
+
+	for k, v := range l.Fields {
+		newWrapper.Fields[k] = v
+	}
+
+	return newWrapper
 }
 
-func (s *SimpleLogger) Infof(format string, data ...interface{}) {
-	if s.level >= InfoLevel {
-		s.logf("INFO", format, data...)
-	}
+func (l *LogWrapper) WithError(err error) *LogWrapper {
+	newWrapper := l.clone()
+	l.Error = err
+	return newWrapper
 }
 
-func (s *SimpleLogger) Debugf(format string, data ...interface{}) {
-	if s.level >= DebugLevel {
-		s.logf("DEBUG", format, data...)
-	}
+func (l *LogWrapper) WithField(key string, value interface{}) *LogWrapper {
+	newWrapper := l.clone()
+	newWrapper.Fields[key] = value
+	return newWrapper
 }
 
-func (s *SimpleLogger) Tracef(format string, data ...interface{}) {
-	if s.level >= TraceLevel {
-		s.logf("TRACE", format, data...)
-	}
+func (l *LogWrapper) Tracef(format string, v ...interface{}) {
+	l.LogFunc(LogPayload{
+		Level:   TraceLevel,
+		Fields:  l.Fields,
+		Error:   l.Error,
+		Message: fmt.Sprintf(format, v...),
+	})
+}
+
+func (l *LogWrapper) Debugf(format string, v ...interface{}) {
+	l.LogFunc(LogPayload{
+		Level:   DebugLevel,
+		Fields:  l.Fields,
+		Error:   l.Error,
+		Message: fmt.Sprintf(format, v...),
+	})
+}
+
+func (l *LogWrapper) Errorf(format string, v ...interface{}) {
+	l.LogFunc(LogPayload{
+		Level:   ErrorLevel,
+		Fields:  l.Fields,
+		Error:   l.Error,
+		Message: fmt.Sprintf(format, v...),
+	})
+}
+
+func (l *LogWrapper) Warnf(format string, v ...interface{}) {
+	l.LogFunc(LogPayload{
+		Level:   WarnLevel,
+		Fields:  l.Fields,
+		Error:   l.Error,
+		Message: fmt.Sprintf(format, v...),
+	})
+}
+
+func (l *LogWrapper) Infof(format string, v ...interface{}) {
+	l.LogFunc(LogPayload{
+		Level:   InfoLevel,
+		Fields:  l.Fields,
+		Error:   l.Error,
+		Message: fmt.Sprintf(format, v...),
+	})
 }

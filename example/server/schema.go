@@ -8,7 +8,7 @@ import (
 	"github.com/graphql-go/graphql"
 )
 
-func buildSchema(l logger.Logger) (*graphql.Schema, error) {
+func buildSchema(l *logger.LogWrapper) (*graphql.Schema, error) {
 	schema, err := graphql.NewSchema(graphql.SchemaConfig{
 		Query: graphql.NewObject(graphql.ObjectConfig{
 			Name: "Query",

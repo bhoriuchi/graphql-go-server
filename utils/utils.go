@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/graphql-go/graphql/language/ast"
@@ -22,4 +23,13 @@ func GetOperationAST(nodes *ast.Document, operationName string) (*ast.OperationD
 	}
 
 	return operation, nil
+}
+
+// ReMarshal converts one type to another
+func ReMarshal(in, out interface{}) error {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
 }

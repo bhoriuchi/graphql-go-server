@@ -9,6 +9,7 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
@@ -20,7 +21,7 @@ import (
 type Config struct {
 	WS                        *websocket.Conn
 	Schema                    *graphql.Schema
-	Logger                    logger.Logger
+	Logger                    *logger.LogWrapper
 	Request                   *http.Request
 	RootValueFunc             func(ctx context.Context, r *http.Request) map[string]interface{}
 	ConnectionInitWaitTimeout time.Duration
@@ -36,17 +37,15 @@ type Config struct {
 	// OnOperation               func()
 }
 
+// wsConnection defines a connection context
 type wsConnection struct {
 	id                     string
 	ctx                    context.Context
 	ws                     *websocket.Conn
 	schema                 *graphql.Schema
-	initMx                 sync.RWMutex
-	ackMx                  sync.RWMutex
-	closeMx                sync.RWMutex
 	config                 Config
-	log                    logger.Logger
-	outgoing               chan OperationMessage
+	log                    *logger.LogWrapper
+	outgoing               chan protocols.OperationMessage
 	closed                 bool
 	mgr                    *manager.Manager
 	connectionInitReceived bool
@@ -54,21 +53,29 @@ type wsConnection struct {
 	connectionParams       map[string]interface{}
 	closeCode              CloseCode
 	closeReason            string
+	initMx                 sync.RWMutex
+	ackMx                  sync.RWMutex
+	closeMx                sync.RWMutex
 }
 
 // NewConnection establishes a GraphQL WebSocket connection. It implements
 // the GraphQL WebSocket protocol by managing its internal state and handling
 // the client-server communication.
 func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
+	id := uuid.NewString()
+	l := config.Logger.
+		WithField("connectionId", id).
+		WithField("subprotocol", Subprotocol)
+
 	c := &wsConnection{
+		id:                     id,
 		ctx:                    ctx,
-		schema:                 config.Schema,
-		id:                     uuid.NewString(),
 		ws:                     config.WS,
+		schema:                 config.Schema,
 		config:                 config,
-		log:                    config.Logger,
+		log:                    l,
 		closed:                 false,
-		outgoing:               make(chan OperationMessage),
+		outgoing:               make(chan protocols.OperationMessage),
 		connectionInitReceived: false,
 		acknowledged:           false,
 		closeCode:              Noop,
@@ -78,15 +85,19 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 
 	// validate the subprotocol
 	if c.ws.Subprotocol() != Subprotocol {
-		c.setClose(SubprotocolNotAcceptable, "Subprotocol not acceptable")
-		c.Close(c.closeCode, c.closeReason)
+		err := fmt.Errorf("subprotocol not acceptable")
+		c.setClose(SubprotocolNotAcceptable, err.Error())
+		c.close(c.closeCode, c.closeReason)
 
 		if c.config.OnClose != nil {
 			c.config.OnClose(c, c.closeCode, c.closeReason)
 		}
 
-		return nil, fmt.Errorf("subprotocol not acceptable")
+		c.log.WithField("error", err).WithField("code", SubprotocolNotAcceptable).Errorf("failed to initialize connection")
+		return nil, err
 	}
+
+	c.log.Debugf("server accepted graphql subprotocol")
 
 	// start the read and write loops
 	go c.writeLoop()
@@ -98,8 +109,9 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 
 	time.AfterFunc(config.ConnectionInitWaitTimeout, func() {
 		if !c.ConnectionInitReceived() {
-			c.setClose(ConnectionInitialisationTimeout, "Connection initialisation timeout")
-			c.Close(c.closeCode, c.closeReason)
+			c.setClose(ConnectionInitialisationTimeout, "connection initialisation timeout")
+			c.log.WithField("code", c.closeCode).Errorf(c.closeReason)
+			c.close(c.closeCode, c.closeReason)
 		}
 	})
 
@@ -111,14 +123,18 @@ func (c *wsConnection) ID() string {
 	return c.id
 }
 
+// Context returns the original connection request context
+func (c *wsConnection) Context() context.Context {
+	return c.ctx
+}
+
 // WS returns the websocket
 func (c *wsConnection) WS() *websocket.Conn {
 	return c.ws
 }
 
-// Context returns the original connection request context
-func (c *wsConnection) Context() context.Context {
-	return c.ctx
+func (c *wsConnection) C() chan protocols.OperationMessage {
+	return c.outgoing
 }
 
 // ConnectionInitReceived
@@ -141,13 +157,13 @@ func (c *wsConnection) ConnectionParams() interface{} {
 }
 
 // Send sends a message
-func (c *wsConnection) Send(msg OperationMessage) {
+func (c *wsConnection) Send(msg protocols.OperationMessage) {
 	if !c.isClosed() {
 		c.outgoing <- msg
 	}
 }
 
-func (c *wsConnection) Close(code CloseCode, msg string) {
+func (c *wsConnection) close(code CloseCode, msg string) {
 	// Close the write loop by closing the outgoing messages channels
 	c.closeMx.Lock()
 	c.closed = true
@@ -156,7 +172,8 @@ func (c *wsConnection) Close(code CloseCode, msg string) {
 	close(c.outgoing)
 	c.closeMx.Unlock()
 
-	c.log.Infof("closed connection %s", c.id)
+	c.mgr.UnsubscribeAll()
+	c.log.WithField("code", code).Infof("closed connection: %s", msg)
 }
 
 func (c *wsConnection) writeLoop() {
@@ -184,7 +201,7 @@ func (c *wsConnection) writeLoop() {
 		// connection will be corrupt, hence we need to close the write loop
 		// and the connection immediately
 		if err := c.ws.WriteJSON(msg); err != nil {
-			c.log.Warnf("sending message failed: %s", err)
+			c.log.WithField("error", err).Warnf("sending message failed")
 			return
 		}
 	}
@@ -193,7 +210,6 @@ func (c *wsConnection) writeLoop() {
 func (c *wsConnection) readLoop() {
 	// Close the WebSocket connection when leaving the read loop
 	defer c.ws.Close()
-	c.ws.SetReadLimit(ReadLimit)
 
 	for {
 		if c.isClosed() {
@@ -210,7 +226,7 @@ func (c *wsConnection) readLoop() {
 				break
 			}
 
-			c.log.Errorf("force closing connection: %s", err)
+			c.log.WithField("error", err).Errorf("force closing connection")
 			c.setClose(BadRequest, err.Error())
 			break
 		}
@@ -223,39 +239,40 @@ func (c *wsConnection) readLoop() {
 		}
 
 		switch msgType {
-		// When the GraphQL WS connection is initiated, send an ACK back
-		case MsgConnectionInit:
+
+		case protocols.MsgConnectionInit:
 			c.handleConnectionInit(msg)
 
-		case MsgPing:
+		case protocols.MsgPing:
 			c.handlePing(msg)
 
-		case MsgPong:
+		case protocols.MsgPong:
 			c.handlePong(msg)
 
-		case MsgSubscribe:
+		case protocols.MsgSubscribe:
 			c.handleSubscribe(msg)
 
-		case MsgComplete:
+		case protocols.MsgComplete:
 			c.handleComplete(msg)
 
 		// GraphQL WS protocol messages that are not handled represent
 		// a bug in our implementation; make this very obvious by logging
 		// an error
 		default:
-			err := fmt.Errorf("unexpected message of type %s received", msgType)
+			err := fmt.Errorf("unexpected message of type %q received", msgType)
 			c.log.Errorf("%d: %s", BadRequest, err)
 			c.setClose(BadRequest, err.Error())
 		}
 	}
 
+	c.log.Tracef("exiting read loop")
 	c.mgr.UnsubscribeAll()
 
 	if c.Acknowledged() && c.config.OnDisconnect != nil {
 		c.config.OnDisconnect(c, c.closeCode, c.closeReason)
 	}
 
-	c.Close(c.closeCode, c.closeReason)
+	c.close(c.closeCode, c.closeReason)
 }
 
 // handleGQLErrors handles graphql errors
@@ -263,7 +280,7 @@ func (c *wsConnection) handleGQLErrors(id string, errs gqlerrors.FormattedErrors
 	if c.config.OnError != nil {
 		maybeErrors, err := c.config.OnError(c, ErrorMessage{
 			ID:      id,
-			Type:    MsgError,
+			Type:    protocols.MsgError,
 			Payload: errs,
 		}, errs)
 

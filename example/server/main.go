@@ -5,13 +5,18 @@ import (
 
 	server "github.com/bhoriuchi/graphql-go-server"
 	"github.com/bhoriuchi/graphql-go-server/logger"
+	"github.com/bhoriuchi/graphql-go-server/options"
 )
 
 var addr = ":3000"
 
 func main() {
-	l := logger.NewSimpleLogger()
-	l.SetLevel(logger.TraceLevel)
+	logFunc := logger.NewSimpleLogFunc(logger.TraceLevel)
+	l := logger.NewLogWrapper(
+		logFunc,
+		nil,
+	)
+
 	l.Infof("Building schema...")
 	s, err := buildSchema(l)
 	if err != nil {
@@ -21,8 +26,8 @@ func main() {
 
 	srv := server.New(
 		*s,
-		server.WithLogger(l),
-		server.WithPretty(),
+		options.WithLogFunc(logFunc),
+		options.WithPretty(),
 	)
 
 	mux := http.NewServeMux()

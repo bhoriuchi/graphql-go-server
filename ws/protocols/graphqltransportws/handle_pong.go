@@ -2,6 +2,8 @@ package graphqltransportws
 
 // handlePong handles a pong message
 func (c *wsConnection) handlePong(msg *RawMessage) {
+	c.log.Tracef("received PONG message")
+
 	var payload map[string]interface{}
 
 	if msg.HasPayload() {
