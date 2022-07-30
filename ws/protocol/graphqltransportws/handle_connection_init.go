@@ -1,6 +1,6 @@
 package graphqltransportws
 
-import "github.com/bhoriuchi/graphql-go-server/ws/protocols"
+import "github.com/bhoriuchi/graphql-go-server/ws/protocol"
 
 // handleConnectionInit handles the connection init
 func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
@@ -58,8 +58,8 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 	c.ackMx.Lock()
 	defer c.ackMx.Unlock()
 
-	c.sendMessage(protocols.OperationMessage{
-		Type:    protocols.MsgConnectionAck,
+	c.sendMessage(protocol.OperationMessage{
+		Type:    protocol.MsgConnectionAck,
 		Payload: payload,
 	})
 	c.log.Debugf("acknowledged connection")

@@ -7,8 +7,8 @@ import (
 	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/options"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqltransportws"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqlws"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
 )
@@ -27,6 +27,7 @@ type Server struct {
 	upgrader websocket.Upgrader
 }
 
+// TODO: add hook options, root func and context func
 func New(schema graphql.Schema, opts ...options.Option) *Server {
 	options := &options.Options{
 		LogFunc:    logger.NoopLogFunc,

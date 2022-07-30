@@ -12,8 +12,8 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/options"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqltransportws"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqlws"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"

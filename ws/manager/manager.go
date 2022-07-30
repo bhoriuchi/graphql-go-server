@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -80,11 +79,6 @@ func (m *Manager) Subscribe(sub *Subscription) error {
 
 	if current, ok := m.subscriptions[sub.OperationID]; ok {
 		if current.IsSub || (!current.IsSub && !sub.IsSub) {
-			c, _ := json.MarshalIndent(current, "", "  ")
-			n, _ := json.MarshalIndent(sub, "", "  ")
-			fmt.Println("CURRENT", string(c))
-			fmt.Println("NEW", string(n))
-
 			return fmt.Errorf("subscriber for %q already exists", sub.OperationID)
 		}
 	}

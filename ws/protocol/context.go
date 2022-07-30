@@ -1,4 +1,4 @@
-package protocols
+package protocol
 
 import (
 	"context"
@@ -26,10 +26,4 @@ type Context interface {
 
 	// ConnectionParams
 	ConnectionParams() map[string]interface{}
-}
-
-type OperationMessage struct {
-	ID      string      `json:"id,omitempty"`
-	Type    MessageType `json:"type"`
-	Payload interface{} `json:"payload,omitempty"`
 }

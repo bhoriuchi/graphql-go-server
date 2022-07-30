@@ -7,12 +7,12 @@ import (
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/utils"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 )
 
-func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
+func (c *wsConnection) handleStart(msg *protocol.OperationMessage) {
 	var (
 		err             error
 		operationResult interface{}
@@ -23,7 +23,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 		c.log.Debugf("received START message")
 		msgtxt := "message contains no ID"
 		c.log.Errorf(msgtxt)
-		c.sendError("", protocols.MsgError, map[string]interface{}{
+		c.sendError("", protocol.MsgError, map[string]interface{}{
 			"message": msgtxt,
 		})
 		return
@@ -34,7 +34,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 
 	if !c.ConnectionInitReceived() {
 		err := fmt.Errorf("attempted start operation on uninitialized connection")
-		c.sendError(id, protocols.MsgConnectionError, map[string]interface{}{
+		c.sendError(id, protocol.MsgConnectionError, map[string]interface{}{
 			"message": err.Error(),
 		})
 		return
@@ -49,7 +49,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 	if err := utils.ReMarshal(msg.Payload, payload); err != nil {
 		msgtxt := fmt.Sprintf("failed to parse start payload: %s", err)
 		subLog.WithError(err).Errorf("failed to parse start payload")
-		c.sendError(id, protocols.MsgError, map[string]interface{}{
+		c.sendError(id, protocol.MsgError, map[string]interface{}{
 			"message": msgtxt,
 		})
 		return
@@ -57,7 +57,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 
 	if err := payload.Validate(); err != nil {
 		subLog.WithError(err).Errorf("start payload validation error")
-		c.sendError(id, protocols.MsgError, map[string]interface{}{
+		c.sendError(id, protocol.MsgError, map[string]interface{}{
 			"message": err.Error(),
 		})
 		return
@@ -80,7 +80,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 	if err != nil {
 		subLog.WithError(err).Errorf("failed to parse query")
 		err = fmt.Errorf("failed to parse query: %s", err)
-		c.sendError(id, protocols.MsgError, map[string]interface{}{
+		c.sendError(id, protocol.MsgError, map[string]interface{}{
 			"message": err.Error(),
 		})
 		return
@@ -90,7 +90,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 	if err != nil {
 		subLog.WithError(err).Errorf("failed to identify operation")
 		err = fmt.Errorf("failed to identify operation: %s", err)
-		c.sendError(id, protocols.MsgError, map[string]interface{}{
+		c.sendError(id, protocol.MsgError, map[string]interface{}{
 			"message": err.Error(),
 		})
 		return
@@ -102,7 +102,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 
 	// add root object
 	if c.config.Roots != nil {
-		switch operation.Kind {
+		switch operation.Operation {
 		case ast.OperationTypeQuery:
 			execArgs.RootObject = c.config.Roots.Query
 		case ast.OperationTypeMutation:
@@ -126,7 +126,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 
 		if execArgs, err = c.config.OnOperation(c, parsedMessage, execArgs); err != nil {
 			c.log.WithError(err).Errorf("onOperation hook failed")
-			c.sendError(id, protocols.MsgError, map[string]interface{}{
+			c.sendError(id, protocol.MsgError, map[string]interface{}{
 				"message": err.Error(),
 			})
 			cancelFunc()
@@ -143,6 +143,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 	switch result := operationResult.(type) {
 	case chan *graphql.Result:
 		if err := c.mgr.Subscribe(&manager.Subscription{
+			IsSub:         true,
 			Channel:       result,
 			ConnectionID:  c.id,
 			OperationID:   id,
@@ -151,7 +152,7 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 			CancelFunc:    cancelFunc,
 		}); err != nil {
 			c.log.WithError(err).Errorf("subscribe operation failed")
-			c.sendError(id, protocols.MsgError, map[string]interface{}{
+			c.sendError(id, protocol.MsgError, map[string]interface{}{
 				"message": err.Error(),
 			})
 			return
@@ -163,15 +164,19 @@ func (c *wsConnection) handleStart(msg *protocols.OperationMessage) {
 
 	case *graphql.Result:
 		cancelFunc()
-		c.sendMessage(protocols.OperationMessage{
-			ID:      id,
-			Type:    protocols.MsgData,
-			Payload: result,
+		c.sendMessage(protocol.OperationMessage{
+			ID:   id,
+			Type: protocol.MsgData,
+			Payload: protocol.ExecutionResult{
+				Errors:     result.Errors,
+				Data:       result.Data,
+				Extensions: result.Extensions,
+			},
 		})
 
-		c.sendMessage(protocols.OperationMessage{
+		c.sendMessage(protocol.OperationMessage{
 			ID:   id,
-			Type: protocols.MsgComplete,
+			Type: protocol.MsgComplete,
 		})
 
 		c.mgr.Unsubscribe(id)
@@ -217,9 +222,9 @@ func (c *wsConnection) subscribe(
 
 				// send the complete message if the subscription is active
 				if c.mgr.HasSubscription(id) {
-					c.sendMessage(protocols.OperationMessage{
+					c.sendMessage(protocol.OperationMessage{
 						ID:   id,
-						Type: protocols.MsgComplete,
+						Type: protocol.MsgComplete,
 					})
 				}
 
@@ -230,18 +235,18 @@ func (c *wsConnection) subscribe(
 			if len(res.Errors) == 1 && res.Data == nil {
 				err := res.Errors[1]
 				c.log.WithError(fmt.Errorf(err.Message)).Errorf("subscription encountered an error")
-				c.sendMessage(protocols.OperationMessage{
+				c.sendMessage(protocol.OperationMessage{
 					ID:   id,
-					Type: protocols.MsgError,
+					Type: protocol.MsgError,
 					Payload: map[string]interface{}{
 						"message": err.Message,
 					},
 				})
 			} else {
-				c.sendMessage(protocols.OperationMessage{
+				c.sendMessage(protocol.OperationMessage{
 					ID:   id,
-					Type: protocols.MsgData,
-					Payload: ExecutionResult{
+					Type: protocol.MsgData,
+					Payload: protocol.ExecutionResult{
 						Errors:     res.Errors,
 						Data:       res.Data,
 						Extensions: res.Extensions,

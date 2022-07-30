@@ -7,7 +7,7 @@ import (
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/utils"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
 	"github.com/graphql-go/graphql/language/ast"
@@ -26,7 +26,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	id, err := msg.ID()
 	if err != nil {
 		c.log.Tracef("received SUBSCRIBE message")
-		c.log.WithField("error", err).Errorf("subscribe operation failed")
+		c.log.WithError(err).Errorf("subscribe operation failed")
 		c.close(BadRequest, err.Error())
 		return
 	}
@@ -35,14 +35,14 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	subLog.Tracef("received SUBSCRIBE message")
 	payload, err := msg.SubscribePayload()
 	if err != nil {
-		subLog.WithField("error", err).Errorf("invalid subscribe message payload")
+		subLog.WithError(err).Errorf("invalid subscribe message payload")
 		c.close(BadRequest, err.Error())
 		return
 	}
 
 	subMsg := SubscribeMessage{
 		ID:      id,
-		Type:    protocols.MsgSubscribe,
+		Type:    protocol.MsgSubscribe,
 		Payload: *payload,
 	}
 
@@ -127,7 +127,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	// add root object
 	if execArgs.RootObject == nil {
 		if c.config.Roots != nil {
-			switch operation.Kind {
+			switch operation.Operation {
 			case ast.OperationTypeQuery:
 				execArgs.RootObject = c.config.Roots.Query
 			case ast.OperationTypeMutation:
@@ -145,7 +145,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	// add context
 	if execArgs.Context == nil {
 		if c.config.ContextValueFunc != nil {
-			execArgs.Context, formattedErrs = c.config.ContextValueFunc(c, protocols.OperationMessage{
+			execArgs.Context, formattedErrs = c.config.ContextValueFunc(c, protocol.OperationMessage{
 				ID:      subMsg.ID,
 				Type:    subMsg.Type,
 				Payload: subMsg.Payload,
@@ -233,8 +233,8 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 			notify = true
 			if err := c.sendNext(NextMessage{
 				ID:   id,
-				Type: protocols.MsgNext,
-				Payload: ExecutionResult{
+				Type: protocol.MsgNext,
+				Payload: protocol.ExecutionResult{
 					Errors:     result.Errors,
 					Data:       result.Data,
 					Extensions: result.Extensions,
@@ -298,8 +298,8 @@ func (c *wsConnection) subscribe(
 			} else {
 				if err := c.sendNext(NextMessage{
 					ID:   id,
-					Type: protocols.MsgNext,
-					Payload: ExecutionResult{
+					Type: protocol.MsgNext,
+					Payload: protocol.ExecutionResult{
 						Errors:     res.Errors,
 						Data:       res.Data,
 						Extensions: res.Extensions,

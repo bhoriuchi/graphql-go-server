@@ -1,4 +1,6 @@
-package protocols
+package protocol
+
+import "github.com/graphql-go/graphql/gqlerrors"
 
 // MessageType is a message type
 type MessageType string
@@ -24,3 +26,19 @@ const (
 	MsgData                MessageType = "data"
 	MsgStop                MessageType = "stop"
 )
+
+// ExecutionResult result of an execution
+type ExecutionResult struct {
+	Errors     gqlerrors.FormattedErrors `json:"errors,omitempty"`
+	Data       interface{}               `json:"data,omitempty"`
+	Path       []interface{}             `json:"path,omitempty"`  // patch result
+	Label      *string                   `json:"label,omitempty"` // patch result
+	HasNext    *bool                     `json:"hasNext,omitempty"`
+	Extensions map[string]interface{}    `json:"extensions,omitempty"`
+}
+
+type OperationMessage struct {
+	ID      string      `json:"id,omitempty"`
+	Type    MessageType `json:"type"`
+	Payload interface{} `json:"payload,omitempty"`
+}

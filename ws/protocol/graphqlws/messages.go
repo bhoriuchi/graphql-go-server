@@ -3,7 +3,7 @@ package graphqlws
 import (
 	"fmt"
 
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 )
 
 // StartMessagePayload defines the parameters of an operation that
@@ -23,7 +23,7 @@ func (s *StartMessagePayload) Validate() error {
 }
 
 type StartMessage struct {
-	ID      string                `json:"id,omitempty"`
-	Type    protocols.MessageType `json:"type"`
-	Payload StartMessagePayload   `json:"payload,omitempty"`
+	ID      string               `json:"id,omitempty"`
+	Type    protocol.MessageType `json:"type"`
+	Payload StartMessagePayload  `json:"payload,omitempty"`
 }

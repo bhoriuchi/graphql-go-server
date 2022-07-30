@@ -3,7 +3,7 @@ package graphqltransportws
 import (
 	"time"
 
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 	"github.com/graphql-go/graphql/gqlerrors"
 )
 
@@ -34,21 +34,21 @@ const (
 )
 
 type CompleteMessage struct {
-	ID   string                `json:"id"`
-	Type protocols.MessageType `json:"type"`
+	ID   string               `json:"id"`
+	Type protocol.MessageType `json:"type"`
 }
 
 // ErrorMessage
 type ErrorMessage struct {
 	ID      string                    `json:"id"`
-	Type    protocols.MessageType     `json:"type"`
+	Type    protocol.MessageType      `json:"type"`
 	Payload gqlerrors.FormattedErrors `json:"payload"`
 }
 
 type SubscribeMessage struct {
-	ID      string                `json:"id"`
-	Type    protocols.MessageType `json:"type"`
-	Payload SubscribePayload      `json:"payload"`
+	ID      string               `json:"id"`
+	Type    protocol.MessageType `json:"type"`
+	Payload SubscribePayload     `json:"payload"`
 }
 
 // SubscribePayload payload for a subscribe operation
@@ -60,17 +60,7 @@ type SubscribePayload struct {
 }
 
 type NextMessage struct {
-	ID      string                `json:"id"`
-	Type    protocols.MessageType `json:"type"`
-	Payload ExecutionResult       `json:"payload"`
-}
-
-// ExecutionResult result of an execution
-type ExecutionResult struct {
-	Errors     gqlerrors.FormattedErrors `json:"errors,omitempty"`
-	Data       interface{}               `json:"data,omitempty"`
-	Path       []interface{}             `json:"path,omitempty"`  // patch result
-	Label      *string                   `json:"label,omitempty"` // patch result
-	HasNext    *bool                     `json:"hasNext,omitempty"`
-	Extensions map[string]interface{}    `json:"extensions,omitempty"`
+	ID      string                   `json:"id"`
+	Type    protocol.MessageType     `json:"type"`
+	Payload protocol.ExecutionResult `json:"payload"`
 }

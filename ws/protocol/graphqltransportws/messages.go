@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bhoriuchi/graphql-go-server/utils"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 )
 
 // RawMessage is the raw message data
@@ -30,13 +30,13 @@ func (m RawMessage) stringField(name string) (string, error) {
 }
 
 // Type validates and extracts the type field value from a raw message
-func (m RawMessage) Type() (protocols.MessageType, error) {
+func (m RawMessage) Type() (protocol.MessageType, error) {
 	str, err := m.stringField("type")
 	if err != nil {
 		return "", err
 	}
 
-	return protocols.MessageType(str), nil
+	return protocol.MessageType(str), nil
 }
 
 // ID validates and extracts the id field value from a raw message

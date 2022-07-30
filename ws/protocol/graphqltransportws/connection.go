@@ -10,7 +10,7 @@ import (
 	"github.com/bhoriuchi/graphql-go-server/logger"
 	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
-	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
+	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
@@ -30,17 +30,17 @@ type Config struct {
 	Request                   *http.Request
 	ConnectionInitWaitTimeout time.Duration
 	Roots                     *options.Roots
-	ContextValueFunc          func(c protocols.Context, msg protocols.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
-	OnConnect                 func(c protocols.Context) (interface{}, error)
-	OnPing                    func(c protocols.Context, payload map[string]interface{})
-	OnPong                    func(c protocols.Context, payload map[string]interface{})
-	OnDisconnect              func(c protocols.Context, code CloseCode, reason string)
-	OnClose                   func(c protocols.Context, code CloseCode, reason string)
-	OnSubscribe               func(c protocols.Context, msg SubscribeMessage) (*graphql.Params, gqlerrors.FormattedErrors)
-	OnNext                    func(c protocols.Context, msg NextMessage, args graphql.Params, Result *graphql.Result) (*ExecutionResult, error)
-	OnError                   func(c protocols.Context, msg ErrorMessage, errs gqlerrors.FormattedErrors) (gqlerrors.FormattedErrors, error)
-	OnComplete                func(c protocols.Context, msg CompleteMessage) error
-	OnOperation               func(c protocols.Context, msg SubscribeMessage, args graphql.Params, result interface{}) (interface{}, error)
+	ContextValueFunc          func(c protocol.Context, msg protocol.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
+	OnConnect                 func(c protocol.Context) (interface{}, error)
+	OnPing                    func(c protocol.Context, payload map[string]interface{})
+	OnPong                    func(c protocol.Context, payload map[string]interface{})
+	OnDisconnect              func(c protocol.Context, code CloseCode, reason string)
+	OnClose                   func(c protocol.Context, code CloseCode, reason string)
+	OnSubscribe               func(c protocol.Context, msg SubscribeMessage) (*graphql.Params, gqlerrors.FormattedErrors)
+	OnNext                    func(c protocol.Context, msg NextMessage, args graphql.Params, Result *graphql.Result) (*protocol.ExecutionResult, error)
+	OnError                   func(c protocol.Context, msg ErrorMessage, errs gqlerrors.FormattedErrors) (gqlerrors.FormattedErrors, error)
+	OnComplete                func(c protocol.Context, msg CompleteMessage) error
+	OnOperation               func(c protocol.Context, msg SubscribeMessage, args graphql.Params, result interface{}) (interface{}, error)
 }
 
 // wsConnection defines a connection context
@@ -51,7 +51,7 @@ type wsConnection struct {
 	schema                 *graphql.Schema
 	config                 Config
 	log                    *logger.LogWrapper
-	outgoing               chan protocols.OperationMessage
+	outgoing               chan protocol.OperationMessage
 	closed                 bool
 	mgr                    *manager.Manager
 	connectionInitReceived bool
@@ -79,7 +79,7 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 		config:                 config,
 		log:                    l,
 		closed:                 false,
-		outgoing:               make(chan protocols.OperationMessage),
+		outgoing:               make(chan protocol.OperationMessage),
 		connectionInitReceived: false,
 		acknowledged:           false,
 		mgr:                    manager.NewManager(),
@@ -127,7 +127,7 @@ func (c *wsConnection) WS() *websocket.Conn {
 	return c.ws
 }
 
-func (c *wsConnection) C() chan protocols.OperationMessage {
+func (c *wsConnection) C() chan protocol.OperationMessage {
 	return c.outgoing
 }
 
@@ -175,7 +175,7 @@ func (c *wsConnection) writeLoop() {
 		// connection will be corrupt, hence we need to close the write loop
 		// and the connection immediately
 		if err := c.ws.WriteJSON(msg); err != nil {
-			c.log.WithField("error", err).Warnf("sending message failed")
+			c.log.WithError(err).Warnf("sending message failed")
 			return
 		}
 	}
@@ -200,7 +200,7 @@ func (c *wsConnection) readLoop() {
 				break
 			}
 
-			c.log.WithField("error", err).Errorf("force closing connection")
+			c.log.WithError(err).Errorf("force closing connection")
 			c.close(BadRequest, err.Error())
 			break
 		}
@@ -214,19 +214,19 @@ func (c *wsConnection) readLoop() {
 
 		switch msgType {
 
-		case protocols.MsgConnectionInit:
+		case protocol.MsgConnectionInit:
 			c.handleConnectionInit(msg)
 
-		case protocols.MsgPing:
+		case protocol.MsgPing:
 			c.handlePing(msg)
 
-		case protocols.MsgPong:
+		case protocol.MsgPong:
 			c.handlePong(msg)
 
-		case protocols.MsgSubscribe:
+		case protocol.MsgSubscribe:
 			c.handleSubscribe(msg)
 
-		case protocols.MsgComplete:
+		case protocol.MsgComplete:
 			c.handleComplete(msg)
 
 		// GraphQL WS protocol messages that are not handled represent
@@ -247,7 +247,7 @@ func (c *wsConnection) sendError(id string, errs gqlerrors.FormattedErrors) erro
 	if c.config.OnError != nil {
 		maybeErrors, err := c.config.OnError(c, ErrorMessage{
 			ID:      id,
-			Type:    protocols.MsgError,
+			Type:    protocol.MsgError,
 			Payload: errs,
 		}, errs)
 
@@ -260,9 +260,9 @@ func (c *wsConnection) sendError(id string, errs gqlerrors.FormattedErrors) erro
 		}
 	}
 
-	c.sendMessage(protocols.OperationMessage{
+	c.sendMessage(protocol.OperationMessage{
 		ID:      id,
-		Type:    protocols.MsgError,
+		Type:    protocol.MsgError,
 		Payload: errs,
 	})
 
@@ -270,7 +270,7 @@ func (c *wsConnection) sendError(id string, errs gqlerrors.FormattedErrors) erro
 }
 
 // Send sends a message
-func (c *wsConnection) sendMessage(msg protocols.OperationMessage) {
+func (c *wsConnection) sendMessage(msg protocol.OperationMessage) {
 	if !c.isClosed() {
 		c.outgoing <- msg
 	}
@@ -328,7 +328,7 @@ func (c *wsConnection) close(code CloseCode, msg string) {
 func (c *wsConnection) sendComplete(id string, notify bool) error {
 	msg := CompleteMessage{
 		ID:   id,
-		Type: protocols.MsgComplete,
+		Type: protocol.MsgComplete,
 	}
 
 	if c.config.OnComplete != nil {
@@ -338,9 +338,9 @@ func (c *wsConnection) sendComplete(id string, notify bool) error {
 	}
 
 	if notify {
-		c.sendMessage(protocols.OperationMessage{
+		c.sendMessage(protocol.OperationMessage{
 			ID:   id,
-			Type: protocols.MsgComplete,
+			Type: protocol.MsgComplete,
 		})
 	}
 
@@ -351,7 +351,7 @@ func (c *wsConnection) sendComplete(id string, notify bool) error {
 func (c *wsConnection) sendNext(msg NextMessage, args graphql.Params, result *graphql.Result) error {
 	var (
 		err         error
-		maybeResult *ExecutionResult
+		maybeResult *protocol.ExecutionResult
 	)
 
 	if c.config.OnNext != nil {
@@ -370,7 +370,7 @@ func (c *wsConnection) sendNext(msg NextMessage, args graphql.Params, result *gr
 		}
 	}
 
-	c.sendMessage(protocols.OperationMessage{
+	c.sendMessage(protocol.OperationMessage{
 		ID:      msg.ID,
 		Type:    msg.Type,
 		Payload: msg.Payload,

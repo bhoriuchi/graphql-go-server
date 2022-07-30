@@ -2,8 +2,6 @@ package graphqlws
 
 import (
 	"time"
-
-	"github.com/graphql-go/graphql/gqlerrors"
 )
 
 type CloseCode int
@@ -20,10 +18,3 @@ const (
 	// Thresholds
 	WriteTimeout = 10 * time.Second
 )
-
-// ExecutionResult result of an execution
-type ExecutionResult struct {
-	Errors     gqlerrors.FormattedErrors `json:"errors,omitempty"`
-	Data       interface{}               `json:"data,omitempty"`
-	Extensions map[string]interface{}    `json:"extensions,omitempty"`
-}
