@@ -15,9 +15,17 @@ const (
 	RequestTypeWS   RequestType = "ws"
 )
 
+/*
+	RootValueFunc             func(c protocols.Context, r *http.Request) (map[string]interface{}, gqlerrors.FormattedErrors)
+	ContextValueFunc          func(c protocols.Context, msg protocols.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
+
+*/
+
 type RequestType string
 
 type RootValueFunc func(ctx context.Context, r *http.Request) map[string]interface{}
+
+type WSRootsFunc func(ctx context.Context, r *http.Request) *Roots
 
 type FormatErrorFunc func(err error) gqlerrors.FormattedError
 
@@ -30,6 +38,7 @@ type Option func(opts *Options)
 type Options struct {
 	Pretty             bool
 	RootValueFunc      RootValueFunc
+	WSRootsFunc        WSRootsFunc
 	FormatErrorFunc    FormatErrorFunc
 	ContextFunc        ContextFunc
 	WSContextFunc      ContextFunc
@@ -38,6 +47,12 @@ type Options struct {
 	WS                 *WSOptions
 	Playground         *ide.PlaygroundOptions
 	GraphiQL           *ide.GraphiQLOptions
+}
+
+type Roots struct {
+	Query        map[string]interface{}
+	Mutation     map[string]interface{}
+	Subscription map[string]interface{}
 }
 
 type WSOptions struct {

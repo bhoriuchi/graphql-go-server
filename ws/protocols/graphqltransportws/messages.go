@@ -5,7 +5,6 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/utils"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
-	"github.com/graphql-go/graphql/gqlerrors"
 )
 
 // RawMessage is the raw message data
@@ -86,71 +85,4 @@ func (m RawMessage) SubscribePayload() (*SubscribePayload, error) {
 	}
 
 	return r, nil
-}
-
-// NewNextMessage creates a new next message
-func NewNextMessage(id string, payload *ExecutionResult) protocols.OperationMessage {
-	return protocols.OperationMessage{
-		ID:      id,
-		Type:    protocols.MsgNext,
-		Payload: payload,
-	}
-}
-
-// NewAckMesage creates a new ack message
-func NewAckMessage(payload interface{}) protocols.OperationMessage {
-	if payload != nil {
-		return protocols.OperationMessage{
-			Type: protocols.MsgConnectionAck,
-		}
-	}
-
-	return protocols.OperationMessage{
-		Type:    protocols.MsgConnectionAck,
-		Payload: payload,
-	}
-}
-
-// NewPingMesage creates a new ping message
-func NewPingMessage(payload interface{}) protocols.OperationMessage {
-	if payload != nil {
-		return protocols.OperationMessage{
-			Type: protocols.MsgPing,
-		}
-	}
-
-	return protocols.OperationMessage{
-		Type:    protocols.MsgPing,
-		Payload: payload,
-	}
-}
-
-// NewPongMesage creates a new pong message
-func NewPongMessage(payload interface{}) protocols.OperationMessage {
-	if payload != nil {
-		return protocols.OperationMessage{
-			Type: protocols.MsgPong,
-		}
-	}
-
-	return protocols.OperationMessage{
-		Type:    protocols.MsgPong,
-		Payload: payload,
-	}
-}
-
-func NewSubscribeMessage(id string, payload *SubscribePayload) protocols.OperationMessage {
-	return protocols.OperationMessage{
-		ID:      id,
-		Type:    protocols.MsgSubscribe,
-		Payload: payload,
-	}
-}
-
-func NewErrorMessage(id string, errs gqlerrors.FormattedErrors) protocols.OperationMessage {
-	return protocols.OperationMessage{
-		ID:      id,
-		Type:    protocols.MsgError,
-		Payload: errs,
-	}
 }

@@ -6,9 +6,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type Connection interface {
-	// ID returns the connection id
-	ID() string
+type Context interface {
+	// ConnectionID returns the connection id
+	ConnectionID() string
 
 	// Context returns the original connection request context
 	Context() context.Context
@@ -19,13 +19,13 @@ type Connection interface {
 	C() chan OperationMessage
 
 	// ConnectionInitReceived
-	ConnectionInitReceived()
+	ConnectionInitReceived() bool
 
 	// Acknowledged
 	Acknowledged() bool
 
 	// ConnectionParams
-	ConnectionParams() interface{}
+	ConnectionParams() map[string]interface{}
 }
 
 type OperationMessage struct {

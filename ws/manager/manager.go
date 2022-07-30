@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -22,6 +23,7 @@ func NewManager() *Manager {
 
 // Subscription interface between ws and graphql execution
 type Subscription struct {
+	IsSub         bool
 	Channel       chan *graphql.Result
 	ConnectionID  string
 	OperationID   string
@@ -35,6 +37,31 @@ func (s *Subscription) unsubscribe() {
 	if s.CancelFunc != nil {
 		s.CancelFunc()
 	}
+}
+
+// SubscriptionCount counts all or specific connection id subscriptions
+// can be used for diagnostics
+func (m *Manager) SubscriptionCount(connectionIDs ...string) int {
+	m.mx.RLock()
+	defer m.mx.RUnlock()
+
+	if len(connectionIDs) == 0 {
+		return len(m.subscriptions)
+	}
+
+	idmap := map[string]interface{}{}
+	for _, id := range connectionIDs {
+		idmap[id] = nil
+	}
+
+	count := 0
+	for _, sub := range m.subscriptions {
+		if _, ok := idmap[sub.ConnectionID]; ok {
+			count++
+		}
+	}
+
+	return count
 }
 
 // HasSubscription returns true if the subscription exists
@@ -51,8 +78,15 @@ func (m *Manager) Subscribe(sub *Subscription) error {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	if _, ok := m.subscriptions[sub.OperationID]; ok {
-		return fmt.Errorf("subscriber for %s already exists", sub.OperationID)
+	if current, ok := m.subscriptions[sub.OperationID]; ok {
+		if current.IsSub || (!current.IsSub && !sub.IsSub) {
+			c, _ := json.MarshalIndent(current, "", "  ")
+			n, _ := json.MarshalIndent(sub, "", "  ")
+			fmt.Println("CURRENT", string(c))
+			fmt.Println("NEW", string(n))
+
+			return fmt.Errorf("subscriber for %q already exists", sub.OperationID)
+		}
 	}
 
 	m.subscriptions[sub.OperationID] = sub

@@ -8,11 +8,17 @@ import (
 	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/logger"
+	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/gqlerrors"
+)
+
+var (
+	CloseDeadlineDuration time.Duration = 100 * time.Millisecond
 )
 
 // ConnectionConfig defines the configuration parameters of a
@@ -22,12 +28,13 @@ type Config struct {
 	Schema              *graphql.Schema
 	Logger              *logger.LogWrapper
 	Request             *http.Request
-	RootValueFunc       func(ctx context.Context, r *http.Request) map[string]interface{}
 	KeepAlive           time.Duration
-	OnConnect           func(c *wsConnection, payload interface{}) interface{}
-	OnDisconnect        func(c *wsConnection)
-	OnOperation         func(c *wsConnection, msg StartMessage, params graphql.Params) (graphql.Params, error)
-	OnOperationComplete func(c *wsConnection, id string)
+	Roots               *options.Roots
+	ContextValueFunc    func(c protocols.Context, msg protocols.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
+	OnConnect           func(c protocols.Context, payload interface{}) interface{}
+	OnDisconnect        func(c protocols.Context)
+	OnOperation         func(c protocols.Context, msg StartMessage, params *graphql.Params) (*graphql.Params, error)
+	OnOperationComplete func(c protocols.Context, id string)
 }
 
 // wsConnection defines a connection context
@@ -86,7 +93,7 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 	return c, nil
 }
 
-func (c *wsConnection) ID() string {
+func (c *wsConnection) ConnectionID() string {
 	return c.id
 }
 
@@ -109,35 +116,15 @@ func (c *wsConnection) ConnectionInitReceived() bool {
 	return c.connectionInitReceived
 }
 
+// Acknowledged is an alias for ConnectionInitReceived
+// to implement the protocols.Context interface
+func (c *wsConnection) Acknowledged() bool {
+	return c.ConnectionInitReceived()
+}
+
 // ConnectionParams
-func (c *wsConnection) ConnectionParams() interface{} {
+func (c *wsConnection) ConnectionParams() map[string]interface{} {
 	return c.connectionParams
-}
-
-// Send sends a message
-func (c *wsConnection) sendMessage(msg protocols.OperationMessage) {
-	if !c.isClosed() {
-		c.outgoing <- msg
-	}
-}
-
-// close closes the connection
-func (c *wsConnection) close(code CloseCode, msg string) {
-	c.closeMx.Lock()
-	c.closed = true
-	c.closeMx.Unlock()
-
-	c.mgr.UnsubscribeAll()
-
-	if c.config.OnDisconnect != nil {
-		c.config.OnDisconnect(c)
-	}
-
-	// close the outgoing channels
-	close(c.ka)
-	close(c.outgoing)
-	c.ws.Close()
-	c.log.Infof("closed connection")
 }
 
 func (c *wsConnection) writeLoop() {
@@ -190,8 +177,7 @@ func (c *wsConnection) readLoop() {
 		if err != nil {
 			// look for a normal closure and exit
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				c.log.Debugf("gracefully closing connection with normal closure")
-				c.close(NormalClosure, "")
+				c.close(NormalClosure, "Client requested normal closure")
 				break
 			}
 
@@ -228,11 +214,54 @@ func (c *wsConnection) readLoop() {
 	}
 }
 
-// isClosed returns true if the connection is closed
-func (c *wsConnection) isClosed() bool {
-	c.closeMx.RLock()
-	defer c.closeMx.RUnlock()
-	return c.closed
+// Send sends a message
+func (c *wsConnection) sendMessage(msg protocols.OperationMessage) {
+	if !c.isClosed() {
+		c.outgoing <- msg
+	}
+}
+
+// close closes the connection
+func (c *wsConnection) close(code CloseCode, msg string) {
+	c.closeMx.Lock()
+	defer c.closeMx.Unlock()
+
+	if c.closed {
+		return
+	}
+
+	// ,ark as closed and stop outbound messages
+	c.closed = true
+	close(c.ka)
+	close(c.outgoing)
+
+	// close the websocket connection
+	closeMsg := websocket.FormatCloseMessage(int(code), msg)
+	deadline := time.Now().Add(CloseDeadlineDuration)
+
+	// close the connection
+	closedWS := true
+	if err := c.ws.WriteControl(websocket.CloseMessage, closeMsg, deadline); err != nil {
+		if err != websocket.ErrCloseSent {
+			c.log.WithError(err).Errorf("failed to write close control message to websocket, trying force close")
+			if err := c.ws.Close(); err != nil {
+				c.log.WithError(err).Errorf("failed to close websocket")
+				closedWS = false
+			}
+		}
+	}
+
+	if closedWS {
+		c.log.WithField("code", code).Infof("CLOSED connection with %q", msg)
+	}
+
+	// clean up subscriptions
+	c.mgr.UnsubscribeAll()
+
+	// onDisconnect hook
+	if c.Acknowledged() && c.config.OnDisconnect != nil {
+		c.config.OnDisconnect(c)
+	}
 }
 
 // handleGQLErrors handles graphql errors
@@ -243,4 +272,11 @@ func (c *wsConnection) sendError(id string, t protocols.MessageType, errs interf
 		Payload: errs,
 	})
 	return nil
+}
+
+// isClosed returns true if the connection is closed
+func (c *wsConnection) isClosed() bool {
+	c.closeMx.RLock()
+	defer c.closeMx.RUnlock()
+	return c.closed
 }

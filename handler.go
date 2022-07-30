@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
+	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols/graphqlws"
 	"github.com/gorilla/websocket"
@@ -247,31 +249,47 @@ func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	s.log.Debugf("Client requested %q subprotocol", ws.Subprotocol())
 
+	var roots *options.Roots
+	if s.options.WSRootsFunc != nil {
+		roots = s.options.WSRootsFunc(ctx, r)
+	}
+
 	// Close the connection early if it doesn't implement a supported protocol
 	switch ws.Subprotocol() {
 	// graphql-ws protocol
 	case graphqlws.Subprotocol:
 		graphqlws.NewConnection(ctx, graphqlws.Config{
-			WS:            ws,
-			Request:       r,
-			Schema:        &s.schema,
-			Logger:        s.log,
-			RootValueFunc: s.options.RootValueFunc,
+			WS:      ws,
+			Request: r,
+			Schema:  &s.schema,
+			Logger:  s.log,
+			Roots:   roots,
 		})
 
 	// graphql-transport-ws protocol
 	case graphqltransportws.Subprotocol:
 		graphqltransportws.NewConnection(ctx, graphqltransportws.Config{
-			WS:            ws,
-			Request:       r,
-			Schema:        &s.schema,
-			Logger:        s.log,
-			RootValueFunc: s.options.RootValueFunc,
+			WS:      ws,
+			Request: r,
+			Schema:  &s.schema,
+			Logger:  s.log,
+			Roots:   roots,
 		})
 
 	default:
 		s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %s", ws.Subprotocol())
-		ws.WriteMessage(websocket.CloseProtocolError, []byte("Connection does not implement a supported GraphQL subprotocol"))
-		ws.Close()
+		deadline := time.Now().Add(100 * time.Millisecond)
+		msg := websocket.FormatCloseMessage(
+			websocket.CloseProtocolError,
+			"Connection does not implement a supported GraphQL subprotocol",
+		)
+
+		if err := ws.WriteControl(websocket.CloseMessage, msg, deadline); err != nil {
+			if err != websocket.ErrCloseSent {
+				if err := ws.Close(); err != nil {
+					s.log.WithError(err).Errorf("failed to close websocket")
+				}
+			}
+		}
 	}
 }

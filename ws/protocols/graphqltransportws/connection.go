@@ -8,12 +8,17 @@ import (
 	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/logger"
+	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocols"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
+)
+
+var (
+	CloseDeadlineDuration time.Duration = 100 * time.Millisecond
 )
 
 // ConnectionConfig defines the configuration parameters of a
@@ -23,18 +28,19 @@ type Config struct {
 	Schema                    *graphql.Schema
 	Logger                    *logger.LogWrapper
 	Request                   *http.Request
-	RootValueFunc             func(ctx context.Context, r *http.Request) map[string]interface{}
 	ConnectionInitWaitTimeout time.Duration
-	OnConnect                 func(c *wsConnection) (interface{}, error)
-	OnPing                    func(c *wsConnection, payload map[string]interface{})
-	OnPong                    func(c *wsConnection, payload map[string]interface{})
-	OnDisconnect              func(c *wsConnection, code CloseCode, reason string)
-	OnClose                   func(c *wsConnection, code CloseCode, reason string)
-	OnSubscribe               func(c *wsConnection, msg SubscribeMessage) (interface{}, error)
-	OnNext                    func(c *wsConnection, msg NextMessage, Args graphql.Params, Result *graphql.Result) (interface{}, error)
-	OnError                   func(c *wsConnection, msg ErrorMessage, errs gqlerrors.FormattedErrors) (gqlerrors.FormattedErrors, error)
-	OnComplete                func(c *wsConnection, msg CompleteMessage) error
-	// OnOperation               func()
+	Roots                     *options.Roots
+	ContextValueFunc          func(c protocols.Context, msg protocols.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
+	OnConnect                 func(c protocols.Context) (interface{}, error)
+	OnPing                    func(c protocols.Context, payload map[string]interface{})
+	OnPong                    func(c protocols.Context, payload map[string]interface{})
+	OnDisconnect              func(c protocols.Context, code CloseCode, reason string)
+	OnClose                   func(c protocols.Context, code CloseCode, reason string)
+	OnSubscribe               func(c protocols.Context, msg SubscribeMessage) (*graphql.Params, gqlerrors.FormattedErrors)
+	OnNext                    func(c protocols.Context, msg NextMessage, args graphql.Params, Result *graphql.Result) (*ExecutionResult, error)
+	OnError                   func(c protocols.Context, msg ErrorMessage, errs gqlerrors.FormattedErrors) (gqlerrors.FormattedErrors, error)
+	OnComplete                func(c protocols.Context, msg CompleteMessage) error
+	OnOperation               func(c protocols.Context, msg SubscribeMessage, args graphql.Params, result interface{}) (interface{}, error)
 }
 
 // wsConnection defines a connection context
@@ -51,8 +57,6 @@ type wsConnection struct {
 	connectionInitReceived bool
 	acknowledged           bool
 	connectionParams       map[string]interface{}
-	closeCode              CloseCode
-	closeReason            string
 	initMx                 sync.RWMutex
 	ackMx                  sync.RWMutex
 	closeMx                sync.RWMutex
@@ -78,22 +82,14 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 		outgoing:               make(chan protocols.OperationMessage),
 		connectionInitReceived: false,
 		acknowledged:           false,
-		closeCode:              Noop,
-		closeReason:            "",
 		mgr:                    manager.NewManager(),
 	}
 
 	// validate the subprotocol
 	if c.ws.Subprotocol() != Subprotocol {
 		err := fmt.Errorf("subprotocol not acceptable")
-		c.setClose(SubprotocolNotAcceptable, err.Error())
-		c.close(c.closeCode, c.closeReason)
-
-		if c.config.OnClose != nil {
-			c.config.OnClose(c, c.closeCode, c.closeReason)
-		}
-
-		c.log.WithField("error", err).WithField("code", SubprotocolNotAcceptable).Errorf("failed to initialize connection")
+		c.log.WithError(err).Errorf("failed to create connection")
+		c.close(SubprotocolNotAcceptable, err.Error())
 		return nil, err
 	}
 
@@ -109,17 +105,15 @@ func NewConnection(ctx context.Context, config Config) (*wsConnection, error) {
 
 	time.AfterFunc(config.ConnectionInitWaitTimeout, func() {
 		if !c.ConnectionInitReceived() {
-			c.setClose(ConnectionInitialisationTimeout, "connection initialisation timeout")
-			c.log.WithField("code", c.closeCode).Errorf(c.closeReason)
-			c.close(c.closeCode, c.closeReason)
+			c.close(ConnectionInitialisationTimeout, "connection initialisation timeout")
 		}
 	})
 
 	return c, nil
 }
 
-// ID returns the connection id
-func (c *wsConnection) ID() string {
+// ConnectionID returns the connection id
+func (c *wsConnection) ConnectionID() string {
 	return c.id
 }
 
@@ -152,28 +146,8 @@ func (c *wsConnection) Acknowledged() bool {
 }
 
 // ConnectionParams
-func (c *wsConnection) ConnectionParams() interface{} {
+func (c *wsConnection) ConnectionParams() map[string]interface{} {
 	return c.connectionParams
-}
-
-// Send sends a message
-func (c *wsConnection) Send(msg protocols.OperationMessage) {
-	if !c.isClosed() {
-		c.outgoing <- msg
-	}
-}
-
-func (c *wsConnection) close(code CloseCode, msg string) {
-	// Close the write loop by closing the outgoing messages channels
-	c.closeMx.Lock()
-	c.closed = true
-
-	c.ws.WriteMessage(int(code), []byte(msg))
-	close(c.outgoing)
-	c.closeMx.Unlock()
-
-	c.mgr.UnsubscribeAll()
-	c.log.WithField("code", code).Infof("closed connection: %s", msg)
 }
 
 func (c *wsConnection) writeLoop() {
@@ -222,19 +196,19 @@ func (c *wsConnection) readLoop() {
 		if err != nil {
 			// look for a normal closure and exit
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				c.setClose(NormalClosure, "Client requested normal closure")
+				c.close(NormalClosure, "Client requested normal closure")
 				break
 			}
 
 			c.log.WithField("error", err).Errorf("force closing connection")
-			c.setClose(BadRequest, err.Error())
+			c.close(BadRequest, err.Error())
 			break
 		}
 
 		msgType, err := msg.Type()
 		if err != nil {
-			c.log.Errorf(err.Error())
-			c.setClose(BadRequest, err.Error())
+			c.log.WithError(err).Errorf("failed to read message type")
+			c.close(BadRequest, err.Error())
 			break
 		}
 
@@ -261,22 +235,15 @@ func (c *wsConnection) readLoop() {
 		default:
 			err := fmt.Errorf("unexpected message of type %q received", msgType)
 			c.log.Errorf("%d: %s", BadRequest, err)
-			c.setClose(BadRequest, err.Error())
+			c.close(BadRequest, err.Error())
 		}
 	}
 
 	c.log.Tracef("exiting read loop")
-	c.mgr.UnsubscribeAll()
-
-	if c.Acknowledged() && c.config.OnDisconnect != nil {
-		c.config.OnDisconnect(c, c.closeCode, c.closeReason)
-	}
-
-	c.close(c.closeCode, c.closeReason)
 }
 
-// handleGQLErrors handles graphql errors
-func (c *wsConnection) handleGQLErrors(id string, errs gqlerrors.FormattedErrors) error {
+// send error sends an error
+func (c *wsConnection) sendError(id string, errs gqlerrors.FormattedErrors) error {
 	if c.config.OnError != nil {
 		maybeErrors, err := c.config.OnError(c, ErrorMessage{
 			ID:      id,
@@ -293,25 +260,128 @@ func (c *wsConnection) handleGQLErrors(id string, errs gqlerrors.FormattedErrors
 		}
 	}
 
-	c.Send(NewErrorMessage(id, errs))
+	c.sendMessage(protocols.OperationMessage{
+		ID:      id,
+		Type:    protocols.MsgError,
+		Payload: errs,
+	})
+
 	return nil
 }
 
-// setClose sets the close code and reason using the mutex
-func (c *wsConnection) setClose(code CloseCode, reason string) {
+// Send sends a message
+func (c *wsConnection) sendMessage(msg protocols.OperationMessage) {
+	if !c.isClosed() {
+		c.outgoing <- msg
+	}
+}
+
+// close closes the socket with a control message
+func (c *wsConnection) close(code CloseCode, msg string) {
+	// Close the write loop by closing the outgoing messages channels
 	c.closeMx.Lock()
 	defer c.closeMx.Unlock()
 
-	// only set the close code if it is unset upon obtaining the lock
-	if c.closeCode == Noop {
-		c.closeCode = code
-		c.closeReason = reason
+	if c.closed {
+		return
 	}
+
+	// mark as closed and stop outbound messages
+	c.closed = true
+	close(c.outgoing)
+
+	// close the websocket connection
+	closeMsg := websocket.FormatCloseMessage(int(code), msg)
+	deadline := time.Now().Add(CloseDeadlineDuration)
+
+	// close the connection
+	closedWS := true
+	if err := c.ws.WriteControl(websocket.CloseMessage, closeMsg, deadline); err != nil {
+		if err != websocket.ErrCloseSent {
+			c.log.WithError(err).Errorf("failed to write close control message to websocket, trying force close")
+			if err := c.ws.Close(); err != nil {
+				c.log.WithError(err).Errorf("failed to close websocket")
+				closedWS = false
+			}
+		}
+	}
+
+	if closedWS {
+		c.log.WithField("code", code).Infof("CLOSED connection with %q", msg)
+	}
+
+	// clean up subscriptions
+	c.mgr.UnsubscribeAll()
+
+	// onDisconnect hook
+	if c.Acknowledged() && c.config.OnDisconnect != nil {
+		c.config.OnDisconnect(c, code, msg)
+	}
+
+	// onClose hook
+	if c.config.OnClose != nil {
+		c.config.OnClose(c, code, msg)
+	}
+}
+
+// sendComplete sends a complete message
+func (c *wsConnection) sendComplete(id string, notify bool) error {
+	msg := CompleteMessage{
+		ID:   id,
+		Type: protocols.MsgComplete,
+	}
+
+	if c.config.OnComplete != nil {
+		if err := c.config.OnComplete(c, msg); err != nil {
+			return err
+		}
+	}
+
+	if notify {
+		c.sendMessage(protocols.OperationMessage{
+			ID:   id,
+			Type: protocols.MsgComplete,
+		})
+	}
+
+	return nil
+}
+
+// sendNext sends a next message
+func (c *wsConnection) sendNext(msg NextMessage, args graphql.Params, result *graphql.Result) error {
+	var (
+		err         error
+		maybeResult *ExecutionResult
+	)
+
+	if c.config.OnNext != nil {
+		maybeResult, err = c.config.OnNext(c, msg, args, result)
+
+		if err != nil {
+			return err
+		}
+
+		if maybeResult != nil {
+			msg = NextMessage{
+				ID:      msg.ID,
+				Type:    msg.Type,
+				Payload: *maybeResult,
+			}
+		}
+	}
+
+	c.sendMessage(protocols.OperationMessage{
+		ID:      msg.ID,
+		Type:    msg.Type,
+		Payload: msg.Payload,
+	})
+
+	return nil
 }
 
 // isClosed returns true if the connection is closed
 func (c *wsConnection) isClosed() bool {
 	c.closeMx.RLock()
 	defer c.closeMx.RUnlock()
-	return c.closeCode != Noop || c.closed
+	return c.closed
 }

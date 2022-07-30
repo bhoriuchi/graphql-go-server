@@ -1,19 +1,22 @@
 package graphqltransportws
 
-import "fmt"
+import "github.com/bhoriuchi/graphql-go-server/ws/protocols"
 
 // handleConnectionInit handles the connection init
 func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
-	c.log.Tracef("received CONNECTION_INIT message")
+	var (
+		err                error
+		payloadOrPermitted interface{}
+		payload            interface{}
+	)
 
 	c.initMx.Lock()
+	c.log.Tracef("received CONNECTION_INIT message")
 
 	// check for initialisation requests
 	if c.connectionInitReceived {
+		c.close(TooManyInitialisationRequests, "too many initialization requests")
 		c.initMx.Unlock()
-		err := fmt.Errorf("too many initialization requests")
-		c.setClose(TooManyInitialisationRequests, err.Error())
-		c.log.WithField("error", err).WithField("code", c.closeCode).Errorf("failed to init connection")
 		return
 	}
 
@@ -22,26 +25,20 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 	c.connectionInitReceived = true
 	c.initMx.Unlock()
 
-	// check for payload
+	// check for payload and add it to the connection params
 	if msg.HasPayload() {
 		payload, err := msg.RecordPayload()
-		if err == nil {
+		if err == nil && payload != nil {
 			c.connectionParams = payload
 		}
 	}
 
-	// handle authorization
-	var (
-		err                error
-		payloadOrPermitted interface{}
-		payload            interface{}
-	)
-
+	// onConnect hook
 	if c.config.OnConnect != nil {
 		payloadOrPermitted, err = c.config.OnConnect(c)
 		if err != nil {
-			c.setClose(InternalServerError, err.Error())
-			c.log.WithField("error", err).WithField("code", c.closeCode).Errorf("onConnect hook failed")
+			c.log.WithError(err).Errorf("onConnect hook failed")
+			c.close(InternalServerError, err.Error())
 			return
 		}
 	}
@@ -49,8 +46,8 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 	switch v := payloadOrPermitted.(type) {
 	case bool:
 		if !v {
-			c.setClose(Forbidden, "Forbidden")
-			c.log.WithField("code", c.closeCode).Warnf("onConnect hook returned false")
+			c.log.Errorf("onConnect hook returned false")
+			c.close(Forbidden, "Forbidden")
 			return
 		}
 		payload = nil
@@ -58,10 +55,13 @@ func (c *wsConnection) handleConnectionInit(msg *RawMessage) {
 		payload = v
 	}
 
-	c.Send(NewAckMessage(payload))
-
 	c.ackMx.Lock()
-	c.log.Errorf("acknowledged connection")
+	defer c.ackMx.Unlock()
+
+	c.sendMessage(protocols.OperationMessage{
+		Type:    protocols.MsgConnectionAck,
+		Payload: payload,
+	})
+	c.log.Debugf("acknowledged connection")
 	c.acknowledged = true
-	c.ackMx.Unlock()
 }

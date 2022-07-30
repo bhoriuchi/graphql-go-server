@@ -114,7 +114,7 @@ func (l *LogWrapper) clone() *LogWrapper {
 
 func (l *LogWrapper) WithError(err error) *LogWrapper {
 	newWrapper := l.clone()
-	l.Error = err
+	newWrapper.Error = err
 	return newWrapper
 }
 

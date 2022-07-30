@@ -1,5 +1,7 @@
 package graphqltransportws
 
+import "github.com/bhoriuchi/graphql-go-server/ws/protocols"
+
 // handlePing handles a ping message
 func (c *wsConnection) handlePing(msg *RawMessage) {
 	c.log.Tracef("received PING message")
@@ -16,5 +18,8 @@ func (c *wsConnection) handlePing(msg *RawMessage) {
 	}
 
 	c.log.Tracef("replying to PING message with PONG")
-	c.Send(NewPongMessage(payload))
+	c.sendMessage(protocols.OperationMessage{
+		Type:    protocols.MsgPong,
+		Payload: payload,
+	})
 }
