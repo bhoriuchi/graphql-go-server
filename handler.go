@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
-	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqlws"
 	"github.com/gorilla/websocket"
@@ -185,9 +185,15 @@ func (s *Server) ContextHandler(ctx context.Context, w http.ResponseWriter, r *h
 		OperationName:  opts.OperationName,
 		Context:        ctx,
 	}
+
 	if s.options.RootValueFunc != nil {
 		params.RootObject = s.options.RootValueFunc(ctx, r)
 	}
+
+	if params.RootObject == nil {
+		params.RootObject = map[string]interface{}{}
+	}
+
 	result := graphql.Do(params)
 
 	if formatErrorFunc := s.options.FormatErrorFunc; formatErrorFunc != nil && len(result.Errors) > 0 {
@@ -236,7 +242,7 @@ func (s *Server) ContextHandler(ctx context.Context, w http.ResponseWriter, r *h
 }
 
 // WSHandler handles websocket connection upgrade
-func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+func (s *Server) WSHandler(w http.ResponseWriter, r *http.Request) {
 	// Establish a WebSocket connection
 	s.log.Debugf("upgrading connection to websocket")
 	var ws, err = s.upgrader.Upgrade(w, r, nil)
@@ -249,46 +255,86 @@ func (s *Server) WSHandler(ctx context.Context, w http.ResponseWriter, r *http.R
 
 	s.log.Debugf("Client requested %q subprotocol", ws.Subprotocol())
 
-	var roots *options.Roots
-	if s.options.WSRootsFunc != nil {
-		roots = s.options.WSRootsFunc(ctx, r)
-	}
-
 	// Close the connection early if it doesn't implement a supported protocol
 	switch ws.Subprotocol() {
 	// graphql-ws protocol
 	case graphqlws.Subprotocol:
-		graphqlws.NewConnection(ctx, graphqlws.Config{
-			WS:      ws,
-			Request: r,
-			Schema:  &s.schema,
-			Logger:  s.log,
-			Roots:   roots,
+		if s.options.GraphQLWS == nil {
+			s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %q", ws.Subprotocol())
+			s.closeWS(
+				ws,
+				websocket.CloseProtocolError,
+				"server does not support %q protocol",
+				ws.Subprotocol(),
+			)
+			return
+		}
+
+		graphqlws.NewConnection(r.Context(), graphqlws.Config{
+			WS:                  ws,
+			Schema:              &s.schema,
+			Logger:              s.log,
+			Request:             r,
+			KeepAlive:           s.options.GraphQLWS.KeepAlive,
+			RootValueFunc:       s.options.GraphQLWS.RootValueFunc,
+			ContextValueFunc:    s.options.GraphQLWS.ContextValueFunc,
+			OnConnect:           s.options.GraphQLWS.OnConnect,
+			OnDisconnect:        s.options.GraphQLWS.OnDisconnect,
+			OnOperation:         s.options.GraphQLWS.OnOperation,
+			OnOperationComplete: s.options.GraphQLWS.OnOperationComplete,
 		})
 
 	// graphql-transport-ws protocol
 	case graphqltransportws.Subprotocol:
-		graphqltransportws.NewConnection(ctx, graphqltransportws.Config{
-			WS:      ws,
-			Request: r,
-			Schema:  &s.schema,
-			Logger:  s.log,
-			Roots:   roots,
+		if s.options.GraphQLTransportWS == nil {
+			s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %q", ws.Subprotocol())
+			s.closeWS(
+				ws,
+				websocket.CloseProtocolError,
+				"server does not support %q protocol",
+				ws.Subprotocol(),
+			)
+			return
+		}
+
+		graphqltransportws.NewConnection(r.Context(), graphqltransportws.Config{
+			WS:                        ws,
+			Schema:                    &s.schema,
+			Logger:                    s.log,
+			Request:                   r,
+			ConnectionInitWaitTimeout: s.options.GraphQLTransportWS.ConnectionInitWaitTimeout,
+			RootValueFunc:             s.options.GraphQLTransportWS.RootValueFunc,
+			ContextValueFunc:          s.options.GraphQLTransportWS.ContextValueFunc,
+			OnConnect:                 s.options.GraphQLTransportWS.OnConnect,
+			OnPing:                    s.options.GraphQLTransportWS.OnPing,
+			OnPong:                    s.options.GraphQLTransportWS.OnPong,
+			OnDisconnect:              s.options.GraphQLTransportWS.OnDisconnect,
+			OnClose:                   s.options.GraphQLTransportWS.OnClose,
+			OnSubscribe:               s.options.GraphQLTransportWS.OnSubscribe,
+			OnNext:                    s.options.GraphQLTransportWS.OnNext,
+			OnError:                   s.options.GraphQLTransportWS.OnError,
+			OnComplete:                s.options.GraphQLTransportWS.OnComplete,
+			OnOperation:               s.options.GraphQLTransportWS.OnOperation,
 		})
 
 	default:
-		s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %s", ws.Subprotocol())
-		deadline := time.Now().Add(100 * time.Millisecond)
-		msg := websocket.FormatCloseMessage(
-			websocket.CloseProtocolError,
-			"Connection does not implement a supported GraphQL subprotocol",
-		)
+		s.log.Warnf("Connection does not implement the GraphQL WS protocol. Subprotocol: %q", ws.Subprotocol())
+		s.closeWS(ws, websocket.CloseProtocolError, "Connection does not implement a supported GraphQL subprotocol")
+	}
+}
 
-		if err := ws.WriteControl(websocket.CloseMessage, msg, deadline); err != nil {
-			if err != websocket.ErrCloseSent {
-				if err := ws.Close(); err != nil {
-					s.log.WithError(err).Errorf("failed to close websocket")
-				}
+// func closeWS closes the websocket
+func (s *Server) closeWS(ws *websocket.Conn, code int, reason string, v ...interface{}) {
+	deadline := time.Now().Add(100 * time.Millisecond)
+	msg := websocket.FormatCloseMessage(
+		code,
+		fmt.Sprintf(reason, v...),
+	)
+
+	if err := ws.WriteControl(websocket.CloseMessage, msg, deadline); err != nil {
+		if err != websocket.ErrCloseSent {
+			if err := ws.Close(); err != nil {
+				s.log.WithError(err).Errorf("failed to close websocket")
 			}
 		}
 	}

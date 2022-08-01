@@ -6,7 +6,6 @@ import (
 
 	"github.com/bhoriuchi/graphql-go-server/ide"
 	"github.com/bhoriuchi/graphql-go-server/logger"
-	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqltransportws"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocol/graphqlws"
 	"github.com/gorilla/websocket"
@@ -23,13 +22,13 @@ const (
 type Server struct {
 	schema   graphql.Schema
 	log      *logger.LogWrapper
-	options  *options.Options
+	options  *Options
 	upgrader websocket.Upgrader
 }
 
-// TODO: add hook options, root func and context func
-func New(schema graphql.Schema, opts ...options.Option) *Server {
-	options := &options.Options{
+// New creates a new server
+func New(schema graphql.Schema, opts ...Option) *Server {
+	options := &Options{
 		LogFunc:    logger.NoopLogFunc,
 		Playground: ide.NewDefaultPlaygroundOptions(),
 	}
@@ -38,18 +37,35 @@ func New(schema graphql.Schema, opts ...options.Option) *Server {
 		opt(options)
 	}
 
-	return &Server{
+	s := &Server{
 		schema:  schema,
 		log:     logger.NewLogWrapper(options.LogFunc, nil),
 		options: options,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-			Subprotocols: []string{
-				graphqltransportws.Subprotocol,
-				graphqlws.Subprotocol,
-			},
-		},
 	}
+
+	// define the supported subprotocols, the protocols are ordered by
+	// priority and the negotiation process will pick the first match
+	subprotocols := []string{}
+
+	// prefer newer protocol
+	if options.GraphQLTransportWS != nil {
+		subprotocols = append(subprotocols, graphqltransportws.Subprotocol)
+	}
+
+	// fallback to older protocol
+	if options.GraphQLWS != nil {
+		subprotocols = append(subprotocols, graphqlws.Subprotocol)
+	}
+
+	if len(subprotocols) > 0 {
+		s.upgrader = websocket.Upgrader{
+			// TODO: make cors configurable
+			CheckOrigin:  func(r *http.Request) bool { return true },
+			Subprotocols: subprotocols,
+		}
+	}
+
+	return s
 }
 
 // isWSUpgrade identifies a websocket upgrade
@@ -63,16 +79,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if s.isWSUpgrade(r) {
 		s.log.Debugf("upgrading connection to websocket")
-
-		if s.options.WSContextFunc != nil {
-			ctx = s.options.WSContextFunc(options.RequestTypeWS, r)
-		}
-		s.WSHandler(ctx, w, r)
+		s.WSHandler(w, r)
 		return
 	}
 
 	if s.options.ContextFunc != nil {
-		ctx = s.options.ContextFunc(options.RequestTypeHTTP, r)
+		ctx = s.options.ContextFunc(r)
 	}
 	s.ContextHandler(ctx, w, r)
 }

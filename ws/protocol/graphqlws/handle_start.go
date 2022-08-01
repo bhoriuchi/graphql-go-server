@@ -96,19 +96,19 @@ func (c *wsConnection) handleStart(msg *protocol.OperationMessage) {
 		return
 	}
 
+	rctx := context.Background()
+	if c.config.ContextValueFunc != nil {
+		rctx, _ = c.config.ContextValueFunc(c, *msg, *execArgs)
+	}
+
 	// add the connection to the metadata context
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	ctx, cancelFunc := context.WithCancel(rctx)
 	execArgs.Context = ctx
 
-	// add root object
-	if c.config.Roots != nil {
-		switch operation.Operation {
-		case ast.OperationTypeQuery:
-			execArgs.RootObject = c.config.Roots.Query
-		case ast.OperationTypeMutation:
-			execArgs.RootObject = c.config.Roots.Mutation
-		case ast.OperationTypeSubscription:
-			execArgs.RootObject = c.config.Roots.Subscription
+	// set the root value
+	if execArgs.RootObject == nil {
+		if c.config.RootValueFunc != nil {
+			execArgs.RootObject = c.config.RootValueFunc(execArgs.Context, c.config.Request, operation)
 		}
 	}
 

@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/bhoriuchi/graphql-go-server/logger"
-	"github.com/bhoriuchi/graphql-go-server/options"
 	"github.com/bhoriuchi/graphql-go-server/ws/manager"
 	"github.com/bhoriuchi/graphql-go-server/ws/protocol"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/gqlerrors"
+	"github.com/graphql-go/graphql/language/ast"
 )
 
 var (
@@ -29,7 +29,7 @@ type Config struct {
 	Logger              *logger.LogWrapper
 	Request             *http.Request
 	KeepAlive           time.Duration
-	Roots               *options.Roots
+	RootValueFunc       func(ctx context.Context, r *http.Request, op *ast.OperationDefinition) map[string]interface{}
 	ContextValueFunc    func(c protocol.Context, msg protocol.OperationMessage, execArgs graphql.Params) (context.Context, gqlerrors.FormattedErrors)
 	OnConnect           func(c protocol.Context, payload interface{}) (interface{}, error)
 	OnDisconnect        func(c protocol.Context)

@@ -124,24 +124,6 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 		return
 	}
 
-	// add root object
-	if execArgs.RootObject == nil {
-		if c.config.Roots != nil {
-			switch operation.Operation {
-			case ast.OperationTypeQuery:
-				execArgs.RootObject = c.config.Roots.Query
-			case ast.OperationTypeMutation:
-				execArgs.RootObject = c.config.Roots.Mutation
-			case ast.OperationTypeSubscription:
-				execArgs.RootObject = c.config.Roots.Subscription
-			}
-		}
-	}
-
-	if execArgs.RootObject != nil {
-		execArgs.RootObject = map[string]interface{}{}
-	}
-
 	// add context
 	if execArgs.Context == nil {
 		if c.config.ContextValueFunc != nil {
@@ -168,6 +150,18 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 	ctx, cancelFunc := context.WithCancel(execArgs.Context)
 	execArgs.Context = ctx
 
+	// set the root value
+	if execArgs.RootObject == nil {
+		if c.config.RootValueFunc != nil {
+			execArgs.RootObject = c.config.RootValueFunc(execArgs.Context, c.config.Request, operation)
+		}
+	}
+
+	if execArgs.RootObject != nil {
+		execArgs.RootObject = map[string]interface{}{}
+	}
+
+	// perform the appropriate operation
 	if operation.Operation == ast.OperationTypeSubscription {
 		operationResult = graphql.Subscribe(*execArgs)
 	} else {

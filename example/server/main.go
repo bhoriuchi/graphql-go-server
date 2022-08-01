@@ -5,7 +5,6 @@ import (
 
 	server "github.com/bhoriuchi/graphql-go-server"
 	"github.com/bhoriuchi/graphql-go-server/logger"
-	"github.com/bhoriuchi/graphql-go-server/options"
 )
 
 var addr = ":3000"
@@ -26,8 +25,8 @@ func main() {
 
 	srv := server.New(
 		*s,
-		options.WithLogFunc(logFunc),
-		options.WithPretty(),
+		server.WithLogFunc(logFunc),
+		server.WithPretty(),
 	)
 
 	mux := http.NewServeMux()
