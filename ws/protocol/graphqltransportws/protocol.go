@@ -53,7 +53,7 @@ type SubscribeMessage struct {
 
 // SubscribePayload payload for a subscribe operation
 type SubscribePayload struct {
-	OperationName *string                `json:"operationName"`
+	OperationName string                 `json:"operationName"`
 	Query         string                 `json:"query"`
 	Variables     map[string]interface{} `json:"variables"`
 	Extensions    map[string]interface{} `json:"extensions"`

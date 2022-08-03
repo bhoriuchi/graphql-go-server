@@ -94,7 +94,7 @@ func (c *wsConnection) handleSubscribe(msg *RawMessage) {
 
 		execArgs = &graphql.Params{
 			Schema:         *c.schema,
-			OperationName:  *payload.OperationName,
+			OperationName:  payload.OperationName,
 			RequestString:  payload.Query,
 			VariableValues: payload.Variables,
 		}
