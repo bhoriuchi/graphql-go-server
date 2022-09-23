@@ -38,8 +38,6 @@ type playgroundData struct {
 
 // renderPlayground renders the Playground GUI
 func RenderPlayground(config *PlaygroundOptions, w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("CONFIG %+v\n", config)
-
 	t := template.New("Playground")
 	t, err := t.Parse(graphcoolPlaygroundTemplate)
 	if err != nil {
