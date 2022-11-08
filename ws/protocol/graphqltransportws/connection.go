@@ -196,7 +196,7 @@ func (c *wsConnection) readLoop() {
 		if err != nil {
 			// look for a normal closure and exit
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-				c.close(NormalClosure, "Client requested normal closure")
+				c.close(NormalClosure, "Client requested normal closure: close error")
 				break
 			}
 

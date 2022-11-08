@@ -217,7 +217,7 @@ func (c *wsConnection) subscribe(
 			return
 
 		case res, more := <-resultChannel:
-			if !more {
+			if !more || res == nil {
 				c.log.Tracef("subscription %q has no more messages, unsubscribing", subName)
 
 				// send the complete message if the subscription is active
@@ -233,7 +233,7 @@ func (c *wsConnection) subscribe(
 
 			// if the response is all errors, close the result and send errors
 			if len(res.Errors) == 1 && res.Data == nil {
-				err := res.Errors[1]
+				err := res.Errors[0]
 				c.log.WithError(fmt.Errorf(err.Message)).Errorf("subscription encountered an error")
 				c.sendMessage(protocol.OperationMessage{
 					ID:   id,
