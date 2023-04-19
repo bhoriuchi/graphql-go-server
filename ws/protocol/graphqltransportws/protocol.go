@@ -12,6 +12,8 @@ type CloseCode int
 
 const (
 	// Subprotocol - https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md
+	// this is the successor protocol to graphql-ws which is confusing because the
+	// library for the spec is graphql-ws
 	Subprotocol = "graphql-transport-ws"
 
 	// Close codes

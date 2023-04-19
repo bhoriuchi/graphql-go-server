@@ -157,14 +157,14 @@ func (c *wsConnection) writeLoop() {
 	defer c.ws.Close()
 
 	for {
-		if c.isClosed() {
-			break
-		}
-
 		msg, ok := <-c.outgoing
 		// Close the write loop when the outgoing messages channel is closed;
 		// this will close the connection
 		if !ok {
+			return
+		}
+
+		if c.isClosed() {
 			return
 		}
 
@@ -186,21 +186,18 @@ func (c *wsConnection) readLoop() {
 	defer c.ws.Close()
 
 	for {
-		if c.isClosed() {
-			break
-		}
 
 		msg := new(RawMessage)
 		err := c.ws.ReadJSON(&msg)
 
 		if err != nil {
 			// look for a normal closure and exit
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || c.isClosed() {
 				c.close(NormalClosure, "Client requested normal closure: close error")
 				break
 			}
 
-			c.log.WithError(err).Errorf("force closing connection")
+			c.log.WithError(err).Errorf("graphql-transport-ws: force closing connection")
 			c.close(BadRequest, err.Error())
 			break
 		}
@@ -216,6 +213,9 @@ func (c *wsConnection) readLoop() {
 
 		case protocol.MsgConnectionInit:
 			c.handleConnectionInit(msg)
+
+		case protocol.MsgConnectionTerminate:
+			c.close(NormalClosure, "client requested connection termination")
 
 		case protocol.MsgPing:
 			c.handlePing(msg)

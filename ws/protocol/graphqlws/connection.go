@@ -132,15 +132,15 @@ func (c *wsConnection) writeLoop() {
 	defer c.ws.Close()
 
 	for {
-		if c.isClosed() {
-			return
-		}
-
 		msg, ok := <-c.outgoing
 		// Close the write loop when the outgoing messages channel is closed;
 		// this will close the connection
 		if !ok {
 			break
+		}
+
+		if c.isClosed() {
+			return
 		}
 
 		// conn.logger.Debugf("send message: %s", msg.String())
@@ -179,7 +179,7 @@ func (c *wsConnection) readLoop() {
 				break
 			}
 
-			c.log.WithError(err).Errorf("force closing connection")
+			c.log.WithError(err).Errorf("graphql-ws: force closing connection")
 			c.sendError("", protocol.MsgConnectionError, map[string]interface{}{
 				"message": err.Error(),
 			})

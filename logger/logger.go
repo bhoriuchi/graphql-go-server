@@ -43,6 +43,10 @@ type LogFunc func(payload LogPayload)
 
 func NoopLogFunc(payload LogPayload) {}
 
+func NewNoopLogger() *LogWrapper {
+	return NewLogWrapper(NoopLogFunc, map[string]interface{}{})
+}
+
 // NewSimpleLogFunc returns a simple logging func
 func NewSimpleLogFunc(level Level) LogFunc {
 	return func(payload LogPayload) {
