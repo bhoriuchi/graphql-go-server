@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -72,7 +73,7 @@ func NewRequestOptions(r *http.Request) *RequestOptions {
 
 	switch contentType {
 	case ContentTypeGraphQL:
-		body, err := ioutil.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			return &RequestOptions{}
 		}
@@ -135,7 +136,7 @@ func GetRequestOptions(r *http.Request) *RequestOptions {
 		if err != nil {
 			return &RequestOptions{}
 		}
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
 		return &RequestOptions{
 			Query: string(body),
 		}
@@ -158,7 +159,7 @@ func GetRequestOptions(r *http.Request) *RequestOptions {
 		if err != nil {
 			return &opts
 		}
-		r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
 		err = json.Unmarshal(body, &opts)
 		if err != nil {
 			// Probably `variables` was sent as a string instead of an object.
@@ -249,7 +250,7 @@ func (s *Server) WSHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Bail out if the WebSocket connection could not be established
 	if err != nil {
-		s.log.Warnf("Failed to establish WebSocket connection", err)
+		s.log.Warnf("Failed to establish WebSocket connection: %s", err)
 		return
 	}
 
