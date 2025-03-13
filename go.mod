@@ -1,6 +1,6 @@
 module github.com/bhoriuchi/graphql-go-server
 
-go 1.17
+go 1.23
 
 require (
 	github.com/google/uuid v1.6.0
